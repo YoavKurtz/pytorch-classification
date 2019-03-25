@@ -43,7 +43,7 @@ parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
 # Datasets
 parser.add_argument('-d', '--data', default='path to dataset', type=str)
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 # Optimization options
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
@@ -144,7 +144,7 @@ def main():
     if args.pretrained:
         print("=> using pre-trained model '{}'".format(args.arch))
         model = models.__dict__[args.arch](pretrained=True)
-    elif args.arch.startswith('resnext'):
+    elif args.arch.startswith('l_resnext'):
         model = models.__dict__[args.arch](
                     baseWidth=args.base_width,
                     cardinality=args.cardinality,
@@ -214,8 +214,6 @@ def main():
             }, is_best, checkpoint=args.checkpoint)
 
     logger.close()
-    logger.plot()
-    savefig(os.path.join(args.checkpoint, 'log.eps'))
 
     print('Best acc:')
     print(best_acc)
@@ -223,6 +221,7 @@ def main():
 def train(train_loader, model, criterion, optimizer, epoch, use_cuda):
     # switch to train mode
     model.train()
+    torch.set_grad_enabled(True)
 
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -233,6 +232,9 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda):
 
     bar = Bar('Processing', max=len(train_loader))
     for batch_idx, (inputs, targets) in enumerate(train_loader):
+        batch_size = inputs.size(0)
+        if batch_size < args.train_batch:
+            continue
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -286,6 +288,7 @@ def test(val_loader, model, criterion, epoch, use_cuda):
 
     # switch to evaluate mode
     model.eval()
+    torch.set_grad_enabled(False)
 
     end = time.time()
     bar = Bar('Processing', max=len(val_loader))
