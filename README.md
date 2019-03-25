@@ -1,4 +1,58 @@
-# pytorch-classification
+# ImageNet Classification with Weight Standardization
+
+This project is our implementation of [Weight Standardization](https://github.com/joe-siyuan-qiao/WeightStandardization) for ImageNet classification with ResNet and ResNeXt.
+The project is forked from [pytorch-classification](https://github.com/bearpaw/pytorch-classification).
+Their original README.md is appended at the end.
+
+Weight Standardization is a simple reparameterization method for convolutional layers.
+It enables micro-batch training with Group Normalization (GN) to match the performances of Batch Normalization (BN) trained with large-batch sizes.
+Please see our [arXiv](https://github.com/joe-siyuan-qiao/pytorch-classification) report for the details.
+If you find this project helpful, please consider citing our paper.
+```
+@article{weightstandardization,
+  author    = {Siyuan Qiao and Huiyu Wang and Chenxi Liu and Wei Shen and Alan Yuille},
+  title     = {Weight Standardization},
+  journal   = {arXiv preprint arXiv:??????????},
+  year      = {2019},
+}
+```
+## Performances of Weight Standardization (WS) on ImageNet
+
+| Architecture | Method      | Top-1   | Top-5   |
+|--------------|:------------|:-------:|:-------:|
+| ResNet-50    | GN + WS     | 23.72   | 6.99    |
+| ResNet-101   | GN + WS     | 22.10   | 6.07    |
+| ResNeXt-50   | GN + WS     | 22.71   | 6.38    |
+| ResNeXt-101  | GN + WS     | 21.80   | 6.03    |
+
+## Training
+**NOTE**: In reality we do not use batch size 1 per GPU for training since it is so slow.
+Because GN+WS does not use any batch knowledge, setting batch size to 256 and iteration size to 1 (for example) is equivalent to setting batch size to 1 and iteration size to 256.
+Therefore, to speed up training, we set batch size to large values and use the idea of iteration size to simulate micro-batch training.
+We provide the following training scripts to get the reported results.
+4 GPUs with 12GB each are assumed.
+
+ResNet-50:
+```
+python -W ignore imagenet.py -a l_resnet50 --data ~/dataset/ILSVRC2012/ --epochs 90 --schedule 30 60 --gamma 0.1 -c checkpoints/imagenet/resnet50 --gpu-id 0,1,2,3
+```
+
+ResNet-101:
+```
+python -W ignore imagenet.py -a l_resnet101 --data ~/dataset/ILSVRC2012/ --epochs 100 --schedule 30 60 90 --gamma 0.1 -c checkpoints/imagenet/resnet101 --gpu-id 0,1,2,3 --train-batch 128 --test-batch 128
+```
+
+ResNeXt-50 32x4d
+```
+python -W ignore imagenet.py -a l_resnext50 --base-width 4 --cardinality 32 --data ~/dataset/ILSVRC2012/ --epochs 100 --schedule 30 60 90 --gamma 0.1 -c checkpoints/imagenet/resnext50-32x4d --gpu-id 0,1,2,3 --train-batch 128 --test-batch 128
+```
+
+ResNeXt-101 32x4d
+```
+python -W ignore imagenet.py -a l_resnext101 --base-width 4 --cardinality 32 --data ~/dataset/ILSVRC2012/ --epochs 100 --schedule 30 60 90 --gamma 0.1 -c checkpoints/imagenet/resnext101-32x4d --gpu-id 0,1,2,3 --train-batch 128 --test-batch 128
+```
+
+## Original README of pytorch-classification
 Classification on CIFAR-10/100 and ImageNet with PyTorch.
 
 ## Features
@@ -39,7 +93,7 @@ Note that the number of parameters are computed on the CIFAR-10 dataset.
 ![cifar](utils/images/cifar.png)
 
 ### ImageNet
-Single-crop (224x224) validation error rate is reported. 
+Single-crop (224x224) validation error rate is reported.
 
 
 | Model                | Params (M)         |  Top-1 Error (%)   | Top-5 Error  (%)   |
