@@ -18,12 +18,12 @@ If you find this project helpful, please consider citing our paper.
 ```
 ## Performances of Weight Standardization (WS) on ImageNet
 
-| Architecture | Method      | Top-1   | Top-5   |
-|--------------|:------------|:-------:|:-------:|
-| ResNet-50    | GN + WS     | 23.72   | 6.99    |
-| ResNet-101   | GN + WS     | 22.10   | 6.07    |
-| ResNeXt-50   | GN + WS     | 22.71   | 6.38    |
-| ResNeXt-101  | GN + WS     | 21.80   | 6.03    |
+| Architecture | Method      | Top-1   | Top-5   | Pretrained |
+|--------------|:------------|:-------:|:-------:|:----------:|
+| ResNet-50    | GN + WS     | 23.72   | 6.99    | [Link](http://cs.jhu.edu/~syqiao/WeightStandardization/R-50-GN-WS.pth.tar)  |
+| ResNet-101   | GN + WS     | 22.10   | 6.07    | [Link](http://cs.jhu.edu/~syqiao/WeightStandardization/R-101-GN-WS.pth.tar)  |
+| ResNeXt-50   | GN + WS     | 22.71   | 6.38    | [Link](http://cs.jhu.edu/~syqiao/WeightStandardization/X-50-GN-WS.pth.tar)  |
+| ResNeXt-101  | GN + WS     | 21.80   | 6.03    | [Link](http://cs.jhu.edu/~syqiao/WeightStandardization/X-101-GN-WS.pth.tar)  |
 
 ## Training
 **NOTE**: In reality we do not use batch size 1 per GPU for training since it is so slow.
