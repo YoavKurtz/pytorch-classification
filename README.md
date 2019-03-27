@@ -1,18 +1,18 @@
 # ImageNet Classification with Weight Standardization
 
-This project is our implementation of [Weight Standardization](https://github.com/joe-siyuan-qiao/WeightStandardization) for ImageNet classification with ResNet and ResNeXt.
+This project is our implementation of [Weight Standardization](https://arxiv.org/abs/1903.10520) for ImageNet classification with ResNet and ResNeXt.
 The project is forked from [pytorch-classification](https://github.com/bearpaw/pytorch-classification).
 Their original README.md is appended at the end.
 
 Weight Standardization is a simple reparameterization method for convolutional layers.
 It enables micro-batch training with Group Normalization (GN) to match the performances of Batch Normalization (BN) trained with large-batch sizes.
-Please see our [arXiv](https://github.com/joe-siyuan-qiao/pytorch-classification) report for the details.
+Please see our [arXiv](https://arxiv.org/abs/1903.10520) report for the details.
 If you find this project helpful, please consider citing our paper.
 ```
 @article{weightstandardization,
   author    = {Siyuan Qiao and Huiyu Wang and Chenxi Liu and Wei Shen and Alan Yuille},
   title     = {Weight Standardization},
-  journal   = {arXiv preprint arXiv:??????????},
+  journal   = {arXiv preprint arXiv:1903.10520},
   year      = {2019},
 }
 ```
