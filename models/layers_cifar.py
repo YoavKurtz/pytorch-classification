@@ -28,5 +28,5 @@ class Conv2d(nn.Conv2d):
 
 
 def BatchNorm2d(num_features):
-    return nn.GroupNorm(num_channels=num_features, num_groups=32)
+    return nn.GroupNorm(num_channels=num_features, num_groups=min(32, num_features // 4))
 

@@ -19,9 +19,13 @@ import torch.utils.data as data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
+
+import wandb
+
 import models.imagenet as customized_models
 
 from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
+CIFAR_PATH = '/data/dataset/'
 
 # Models
 default_model_names = sorted(name for name in models.__dict__
@@ -80,12 +84,16 @@ parser.add_argument('--depth', type=int, default=29, help='Model depth.')
 parser.add_argument('--cardinality', type=int, default=32, help='ResNet cardinality (group).')
 parser.add_argument('--base-width', type=int, default=4, help='ResNet base width.')
 parser.add_argument('--widen-factor', type=int, default=4, help='Widen factor. 4 -> 64, 8 -> 128, ...')
+parser.add_argument('--use-ws', action='store_true', default=False)
 # Miscs
-parser.add_argument('--manualSeed', type=int, help='manual seed')
+parser.add_argument('--manualSeed', type=int, help='manual seed', default=0)
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
+parser.add_argument('--wandb-off', action='store_true', default=False)
+parser.add_argument('--notes', type=str, default=None)
+
 #Device options
 parser.add_argument('--gpu-id', default='0', type=str,
                     help='id(s) for CUDA_VISIBLE_DEVICES')
@@ -107,40 +115,92 @@ if use_cuda:
 
 best_acc = 0  # best test accuracy
 
+
+def print_flare(s: str):
+    print('<' + '=' * 5 + s + '=' * 5 + '>')
+
+
+def get_loaders(args, is_cifar):
+    if is_cifar:
+        print_flare('CIFAR training')
+        transform_train = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+
+        transform_test = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+        if args.data == 'cifar10':
+            dataloader = datasets.CIFAR10
+            num_classes = 10
+        else:
+            dataloader = datasets.CIFAR100
+            num_classes = 100
+
+        trainset = dataloader(root=os.path.join(CIFAR_PATH, args.data), train=True, download=False,
+                              transform=transform_train)
+        train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.train_batch, shuffle=True,
+                                                   num_workers=args.workers)
+
+        testset = dataloader(root=os.path.join(CIFAR_PATH, args.data), train=False, download=False,
+                             transform=transform_test)
+        val_loader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch, shuffle=False,
+                                                 num_workers=args.workers)
+    else:
+        print_flare('IMNET training')
+        traindir = os.path.join(args.data, 'train')
+        valdir = os.path.join(args.data, 'val')
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
+
+        train_loader = torch.utils.data.DataLoader(
+            datasets.ImageFolder(traindir, transforms.Compose([
+                transforms.RandomSizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+            ])),
+            batch_size=args.train_batch, shuffle=True,
+            num_workers=args.workers, pin_memory=True)
+
+        val_loader = torch.utils.data.DataLoader(
+            datasets.ImageFolder(valdir, transforms.Compose([
+                transforms.Scale(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize,
+            ])),
+            batch_size=args.test_batch, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
+        num_classes = 1000
+
+    return train_loader, val_loader, num_classes
+
+
 def main():
     global best_acc
     start_epoch = args.start_epoch  # start from epoch 0 or last checkpoint epoch
-
-    if not os.path.isdir(args.checkpoint):
+    use_chkpt = args.checkpoint is not None
+    if use_chkpt and not os.path.isdir(args.checkpoint):
         mkdir_p(args.checkpoint)
 
+    is_cifar = args.data in ['cifar10', 'cifar100']
+
+    use_wandb = not args.wandb_off
+    if use_wandb:
+        tags = [args.data if is_cifar else 'imnet']
+        wandb.init(project='group_ortho', config=vars(args), notes=args.notes, tags=tags)
     # Data loading code
-    traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-
-    train_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(traindir, transforms.Compose([
-            transforms.RandomSizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.train_batch, shuffle=True,
-        num_workers=args.workers, pin_memory=True)
-
-    val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Scale(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.test_batch, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
+    train_loader, val_loader, num_classes = get_loaders(args, is_cifar)
 
     # create model
+    if args.arch in ['l_resnet110']:
+        assert is_cifar, f'{args.arch} was created to run on CIFAR'
+
     if args.pretrained:
         print("=> using pre-trained model '{}'".format(args.arch))
         model = models.__dict__[args.arch](pretrained=True)
@@ -151,7 +211,9 @@ def main():
                 )
     else:
         print("=> creating model '{}'".format(args.arch))
-        model = models.__dict__[args.arch]()
+        model = models.__dict__[args.arch](
+            num_classes=num_classes,
+            use_ws=args.use_ws)
 
     if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
         model.features = torch.nn.DataParallel(model.features)
@@ -199,24 +261,33 @@ def main():
         train_loss, train_acc = train(train_loader, model, criterion, optimizer, epoch, use_cuda)
         test_loss, test_acc = test(val_loader, model, criterion, epoch, use_cuda)
 
+        if use_wandb:
+            wandb.log({'train_loss': train_loss, 'epoch': epoch, 'val_loss': test_loss, 'val acc': test_acc})
+
         # append logger file
         logger.append([state['lr'], train_loss, test_loss, train_acc, test_acc])
 
         # save model
         is_best = test_acc > best_acc
         best_acc = max(test_acc, best_acc)
-        save_checkpoint({
+        if use_chkpt:
+            save_checkpoint({
                 'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
                 'acc': test_acc,
                 'best_acc': best_acc,
-                'optimizer' : optimizer.state_dict(),
+                'optimizer': optimizer.state_dict(),
             }, is_best, checkpoint=args.checkpoint)
 
     logger.close()
 
     print('Best acc:')
     print(best_acc)
+
+    if use_wandb:
+        wandb.summary['best top1'] = best_acc
+        wandb.finish()
+
 
 def train(train_loader, model, criterion, optimizer, epoch, use_cuda):
     # switch to train mode
@@ -239,8 +310,8 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda):
         data_time.update(time.time() - end)
 
         if use_cuda:
-            inputs, targets = inputs.cuda(), targets.cuda(async=True)
-        inputs, targets = torch.autograd.Variable(inputs), torch.autograd.Variable(targets)
+            inputs = inputs.cuda()
+            targets = targets.cuda()
 
         # compute output
         outputs = model(inputs)
