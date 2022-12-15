@@ -65,7 +65,7 @@ class Bottleneck(nn.Module):
         super(Bottleneck, self).__init__()
         self.conv1 = conv1x1(inplanes, planes, use_ws)
         self.bn1 = L.BatchNorm2d(planes)
-        self.conv2 = conv3x3(planes, planes, stride)
+        self.conv2 = conv3x3(planes, planes, use_ws, stride)
         self.bn2 = L.BatchNorm2d(planes)
         self.conv3 = conv1x1(planes, planes * self.expansion, use_ws)
         self.bn3 = L.BatchNorm2d(planes * self.expansion)
@@ -102,10 +102,10 @@ class ResNet(nn.Module):
         super(ResNet, self).__init__()
         self.inplanes = 64
         if use_ws:
-            self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
+            self.conv1 = L.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
                                    bias=False)
         else:
-            self.conv1 = L.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
+            self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
                                    bias=False)
         self.bn1 = L.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)

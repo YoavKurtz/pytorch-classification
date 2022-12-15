@@ -25,6 +25,8 @@ import wandb
 import models.imagenet as customized_models
 
 from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
+import weight_regularization as wr
+
 CIFAR_PATH = '/data/dataset/'
 
 # Models
@@ -62,7 +64,7 @@ parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--drop', '--dropout', default=0, type=float,
                     metavar='Dropout', help='Dropout ratio')
-parser.add_argument('--schedule', type=int, nargs='+', default=[150, 225],
+parser.add_argument('--schedule', type=int, nargs='+', default=[30, 60],
                         help='Decrease learning rate at these epochs.')
 parser.add_argument('--gamma', type=float, default=0.1, help='LR is multiplied by gamma on schedule.')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
@@ -70,8 +72,8 @@ parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
 parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 # Checkpoints
-parser.add_argument('-c', '--checkpoint', default='checkpoint', type=str, metavar='PATH',
-                    help='path to save checkpoint (default: checkpoint)')
+parser.add_argument('-c', '--checkpoint', default=None, type=str, metavar='PATH',
+                    help='path to save checkpoint (default: None)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 # Architecture
@@ -92,17 +94,20 @@ parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
 parser.add_argument('--wandb-off', action='store_true', default=False)
+parser.add_argument('--checkpoint-off', action='store_true', default=False)
 parser.add_argument('--notes', type=str, default=None)
 
 #Device options
 parser.add_argument('--gpu-id', default='0', type=str,
                     help='id(s) for CUDA_VISIBLE_DEVICES')
+# Ortho reg
+parser.add_argument('--reg-type', type=str, default=None)
+parser.add_argument('--reg-gamma', type=float, default=1e-2)
 
 args = parser.parse_args()
 state = {k: v for k, v in args._get_kwargs()}
 
 # Use CUDA
-os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_id
 use_cuda = torch.cuda.is_available()
 
 # Random seed
@@ -184,9 +189,19 @@ def get_loaders(args, is_cifar):
 def main():
     global best_acc
     start_epoch = args.start_epoch  # start from epoch 0 or last checkpoint epoch
-    use_chkpt = args.checkpoint is not None
-    if use_chkpt and not os.path.isdir(args.checkpoint):
+
+    use_chkpt = not args.checkpoint_off
+    if not use_chkpt:
+        print_flare('Checkpoints are disabled!')
+
+    if args.checkpoint is None:
+        # Create path according to runtime flags
+        dir_name = 'ws_' + str(args.use_ws) + '_reg_' + ('0' if args.reg_type is None else args.reg_type)
+        args.checkpoint = os.path.join('checkpoint', args.data, args.arch, dir_name)
+    if not os.path.isdir(args.checkpoint):
         mkdir_p(args.checkpoint)
+
+    print(f'Log/Chkpt dir is {args.checkpoint}')
 
     is_cifar = args.data in ['cifar10', 'cifar100']
 
@@ -215,10 +230,12 @@ def main():
             num_classes=num_classes,
             use_ws=args.use_ws)
 
+    weight_groups_dict = wr.get_layers_to_regularize(model, input_shape=(3, 32, 32) if is_cifar else (3, 224, 224))
+
     if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
         model.features = torch.nn.DataParallel(model.features)
         model.cuda()
-    else:
+    elif torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model).cuda()
 
     cudnn.benchmark = True
@@ -258,11 +275,13 @@ def main():
 
         print('\nEpoch: [%d | %d] LR: %f' % (epoch + 1, args.epochs, state['lr']))
 
-        train_loss, train_acc = train(train_loader, model, criterion, optimizer, epoch, use_cuda)
+        train_loss, train_acc, reg_loss, class_loss = train(train_loader, model, criterion, optimizer, epoch, use_cuda,
+                                                            weight_groups_dict)
         test_loss, test_acc = test(val_loader, model, criterion, epoch, use_cuda)
 
         if use_wandb:
-            wandb.log({'train_loss': train_loss, 'epoch': epoch, 'val_loss': test_loss, 'val acc': test_acc})
+            wandb.log({'train_loss': train_loss, 'epoch': epoch, 'val_loss': test_loss, 'val acc': test_acc,
+                       'reg_loss': reg_loss, 'classification loss': class_loss})
 
         # append logger file
         logger.append([state['lr'], train_loss, test_loss, train_acc, test_acc])
@@ -289,7 +308,7 @@ def main():
         wandb.finish()
 
 
-def train(train_loader, model, criterion, optimizer, epoch, use_cuda):
+def train(train_loader, model, criterion, optimizer, epoch, use_cuda, weight_groups_dict):
     # switch to train mode
     model.train()
     torch.set_grad_enabled(True)
@@ -299,6 +318,8 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda):
     losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
+    reg_loss = AverageMeter()
+    task_losses = AverageMeter()
     end = time.time()
 
     bar = Bar('Processing', max=len(train_loader))
@@ -315,13 +336,21 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda):
 
         # compute output
         outputs = model(inputs)
-        loss = criterion(outputs, targets)
+        task_loss = criterion(outputs, targets)
+        if args.reg_type is not None:
+            ortho_loss = wr.group_reg_ortho_l2(model, args.reg_type, weight_groups_dict)
+            loss = task_loss + args.reg_gamma * ortho_loss
+        else:
+            loss = task_loss
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(outputs.data, targets.data, topk=(1, 5))
-        losses.update(loss.data[0], inputs.size(0))
-        top1.update(prec1[0], inputs.size(0))
-        top5.update(prec5[0], inputs.size(0))
+        losses.update(loss.item(), inputs.size(0))
+        top1.update(prec1.item(), inputs.size(0))
+        top5.update(prec5.item(), inputs.size(0))
+        task_losses.update(task_loss.item(), inputs.shape[0])
+        if args.reg_type is not None:
+            reg_loss.update(ortho_loss.item(), inputs.shape[0])
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -346,7 +375,9 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda):
                     )
         bar.next()
     bar.finish()
-    return (losses.avg, top1.avg)
+
+    return losses.avg, top1.avg, reg_loss.avg, task_losses.avg
+
 
 def test(val_loader, model, criterion, epoch, use_cuda):
     global best_acc
@@ -369,17 +400,17 @@ def test(val_loader, model, criterion, epoch, use_cuda):
 
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
-        inputs, targets = torch.autograd.Variable(inputs, volatile=True), torch.autograd.Variable(targets)
 
         # compute output
-        outputs = model(inputs)
+        with torch.no_grad():
+            outputs = model(inputs)
         loss = criterion(outputs, targets)
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(outputs.data, targets.data, topk=(1, 5))
-        losses.update(loss.data[0], inputs.size(0))
-        top1.update(prec1[0], inputs.size(0))
-        top5.update(prec5[0], inputs.size(0))
+        losses.update(loss.item(), inputs.size(0))
+        top1.update(prec1.item(), inputs.size(0))
+        top5.update(prec5.item(), inputs.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)

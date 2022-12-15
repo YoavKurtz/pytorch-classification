@@ -1,0 +1,39 @@
+project: group_ortho
+name: cifar100_resnet110_lambda_sweep
+description: Checking multiple lambdas for the regularization loss. Running without WS. Shorter runs for testings.
+
+program: imagenet.py
+
+method: grid
+metric:
+  goal: maximize
+  name: val acc
+
+parameters:
+  arch:
+    value: l_resnet110
+  data:
+    value: cifar100
+  train-batch:
+    value: 128
+  test-batch:
+    value: 128
+  epochs:
+    value: 90
+  gamma:
+    value: 0.1
+  wd:
+    value: 5e-4
+  reg-type:
+    value: intra
+  checkpoint:
+    value: checkpoint/temp
+  #==== SWEEP PARAMS ====#
+  reg-gamma:
+    values: [1, 1e-1, 1e-2, 1e-3]
+
+command:
+  - python
+  - ${program}
+  - ${args}
+  - --checkpoint-off
