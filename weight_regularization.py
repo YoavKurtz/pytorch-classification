@@ -45,15 +45,26 @@ def get_layers_to_regularize(model: nn.Module, input_shape):
     return out_dict
 
 
-def orth_dist(mat):
+def selective_orth_dist(w):
     """
     Taken from https://github.com/samaonline/Orthogonal-Convolutional-Neural-Networks/blob/aa7f56901c661a124e0cfe72eb2c9dc98045ce94/imagenet/utils.py#L42
-    “selective” soft orthogonality regularization
+    Selective Double Soft Orthogonality Regularization
     """
-    mat = mat.reshape(mat.shape[0], -1)
+    mat = w.reshape(w.shape[0], -1)
     if mat.shape[0] < mat.shape[1]:
         mat = mat.T
     return torch.norm(mat.T @ mat - torch.eye(mat.shape[1]).cuda()) ** 2
+
+
+def orth_dist(w):
+    """
+    Taken from https://github.com/samaonline/Orthogonal-Convolutional-Neural-Networks/blob/aa7f56901c661a124e0cfe72eb2c9dc98045ce94/imagenet/utils.py#L42
+    Soft Orthogonality Regularization
+    """
+    mat = w.reshape(w.shape[0], -1)
+
+    return torch.norm(mat @ mat.T - torch.eye(mat.shape[0]).cuda()) ** 2
+
 
 
 def remove_prefix(k):
@@ -84,7 +95,7 @@ def group_reg_ortho_l2(model: nn.Module, reg_type: str, layers_dict: dict):
                     dist = orth_dist(w)
 
                     total_reg_value += dist
-            else:
+            elif reg_type == 'inter':
                 # Inter-group orthogonalization
                 for ii in range(num_groups):
                     # Create ortho matrix
@@ -92,5 +103,7 @@ def group_reg_ortho_l2(model: nn.Module, reg_type: str, layers_dict: dict):
                     dist = orth_dist(w)
 
                     total_reg_value += dist
+            else:
+                raise Exception(f'Unsupported mode {reg_type}')
 
     return total_reg_value
