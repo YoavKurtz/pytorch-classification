@@ -12,15 +12,15 @@ import torch.optim
 import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-from torch.autograd import Variable
-from torch.nn.functional import normalize
 import wandb
+
 from timm.utils import random_seed
 
 from models.cifar.wrn import WideResNet
 import weight_regularization as wr
 
 CIFAR_PATH = '/data/dataset/'
+GSO_TYPES = ['GSO_intra', 'GSO_inter']
 
 parser = argparse.ArgumentParser(description='PyTorch WideResNet Training')
 parser.add_argument('--dataset', default='cifar10', type=str,
@@ -58,6 +58,7 @@ parser.set_defaults(augment=True)
 parser.add_argument('--wandb-off', action='store_true', default=False)
 parser.add_argument('--notes', type=str, default=None)
 parser.add_argument('--extra-tags', type=str, default='')
+parser.add_argument('--group-dict-path', type=str, default=None)
 parser.add_argument('--use-ws', action='store_true', default=False)
 parser.add_argument('--adjust-decay', action='store_true', default=False)
 parser.add_argument('--manualSeed', type=int, help='manual seed', default=0)
@@ -93,7 +94,6 @@ def weights_reg(mdl, reg_type, weight_groups_dict=None):
 
 best_prec1 = 0
 
-
 def main():
     global args, best_prec1
     args = parser.parse_args()
@@ -107,6 +107,9 @@ def main():
         tags = [args.dataset, 'wide resnet']
         if not args.adjust_decay:
             tags += ['no decay adj']
+        if args.extra_tags != '':
+            tags += [args.extra_tags]
+
         wandb.init(project='group_ortho', config=vars(args), notes=args.notes, tags=tags)
 
     dir_name = 'ws_' + str(args.use_ws) + '_reg_' + ('0' if args.reg_type is None else args.reg_type) +\
@@ -162,7 +165,18 @@ def main():
     # Initial Value of Decay Values
     odecay = args.ortho_decay
 
-    weight_groups_dict = wr.get_layers_to_regularize(model, (3, 32, 32))
+    if args.norm == 'GN' and args.reg_type in GSO_TYPES:
+        weight_groups_dict = wr.get_layers_to_regularize(model, (3, 32, 32))
+    elif args.norm == 'BN' and args.reg_type in GSO_TYPES:
+        # Load saved group dict and use it to set ortho groups
+        assert os.path.exists(args.group_dict_path), 'Must specify path to weight-group dict'
+        weight_groups_dict = torch.load(args.group_dict_path)
+    else:
+        weight_groups_dict = {}
+
+    if args.group_dict_path is not None and args.norm == 'GN':
+        torch.save(weight_groups_dict, args.group_dict_path)
+
     # for training on multiple GPUs.
     # Use CUDA_VISIBLE_DEVICES=0,1 to specify which GPUs to use
     if torch.cuda.device_count() > 1:
