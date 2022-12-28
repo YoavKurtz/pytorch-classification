@@ -75,7 +75,7 @@ def remove_prefix(k):
     return k
 
 
-def group_reg_ortho_l2(model: nn.Module, reg_type: str, layers_dict: dict):
+def group_reg_ortho_l2(model: nn.Module, reg_type: str, layers_dict: dict, randomize: bool = False):
     assert reg_type in ['inter', 'intra']
 
     total_reg_value = 0
@@ -87,6 +87,11 @@ def group_reg_ortho_l2(model: nn.Module, reg_type: str, layers_dict: dict):
             num_groups = layers_dict[k]
             c_out = W.shape[0]
             group_size = c_out // num_groups
+
+            if randomize:
+                # Randomly permute the output filters - this way filters will not be normalized according
+                # to the GN groups
+                W = W[torch.randperm(c_out)]
 
             if reg_type == 'intra':
                 for ii in range(group_size):

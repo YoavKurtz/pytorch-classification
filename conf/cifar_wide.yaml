@@ -1,0 +1,32 @@
+
+dataset: cifar10
+epochs: 200
+start_epoch: 0
+batch_size: 128
+lr: 0.1
+momentum: 0.9
+norm: BN
+reg_type:
+nesterov: True
+weight_decay: 1e-8
+ortho_decay: 0.1
+print_freq: 10
+layers: 28
+widen_factor: 10
+droprate: 0.3
+augment: True
+resume: ""
+wandb_off: False
+
+force_num_groups:
+
+notes: ""
+extra_tags: ""
+group_dict_path:
+use_ws: False
+adjust_decay: True
+
+manualSeed: 0
+
+random_filter_order: False
+

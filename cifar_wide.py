@@ -14,6 +14,9 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import wandb
 
+import hydra
+from omegaconf import OmegaConf, DictConfig
+
 from timm.utils import random_seed
 
 from models.cifar.wrn import WideResNet
@@ -38,7 +41,7 @@ parser.add_argument('--norm', type=str, default='BN', help='BN/GN')
 parser.add_argument('--reg-type', type=str, default=None, help='SO, GSO_intra, GSO_inter')
 
 parser.add_argument('--nesterov', default=True, type=bool, help='nesterov momentum')
-parser.add_argument('--weight-decay', '--wd', default=5e-4, type=float,
+parser.add_argument('--weight-decay', '--wd', default=1e-8, type=float,
                     help='weight decay (default: 5e-4)')
 parser.add_argument('--ortho-decay', '--od', default=1e-2, type=float,
                     help='ortho weight decay')
@@ -63,12 +66,22 @@ parser.add_argument('--use-ws', action='store_true', default=False)
 parser.add_argument('--adjust-decay', action='store_true', default=False)
 parser.add_argument('--manualSeed', type=int, help='manual seed', default=0)
 
+parser.add_argument('--force_num_groups', type=int, default=None)
 
-def get_group_norm(num_features):
-    """
-    setting num groups according to Weight-Standardization CIFAR flow
-    """
-    return nn.GroupNorm(num_channels=num_features, num_groups=min(32, num_features // 4))
+
+class GroupNormCreator:
+    # Functor for creating GN layer
+    def __init__(self, force_num_groups=None):
+        self.force_num_groups = force_num_groups
+
+    def __call__(self, num_features):
+        if self.force_num_groups:
+            num_groups = min(self.force_num_groups, num_features)
+        else:
+            # setting num groups according to Weight-Standardization CIFAR flow
+            num_groups = min(32, num_features // 4)
+
+        return nn.GroupNorm(num_channels=num_features, num_groups=num_groups)
 
 
 def l2_reg_ortho(mdl):
@@ -83,20 +96,19 @@ def l2_reg_ortho(mdl):
     return l2_reg
 
 
-def weights_reg(mdl, reg_type, weight_groups_dict=None):
+def weights_reg(mdl, reg_type, weight_groups_dict=None, randomize=False):
     if reg_type == 'SO':
         return l2_reg_ortho(mdl)
     elif reg_type in ['GSO_intra', 'GSO_inter']:
-        return wr.group_reg_ortho_l2(mdl, reg_type[len('GSO_'):], weight_groups_dict)
+        return wr.group_reg_ortho_l2(mdl, reg_type[len('GSO_'):], weight_groups_dict, randomize=randomize)
     else:
         return 0
 
 
-best_prec1 = 0
-
-def main():
-    global args, best_prec1
-    args = parser.parse_args()
+@hydra.main(version_base=None, config_path='conf', config_name='cifar_wide')
+def main(args: DictConfig):
+    best_prec1 = 0
+    # args = parser.parse_args()
 
     if args.manualSeed is not None:
         random_seed(args.manualSeed)
@@ -110,7 +122,8 @@ def main():
         if args.extra_tags != '':
             tags += [args.extra_tags]
 
-        wandb.init(project='group_ortho', config=vars(args), notes=args.notes, tags=tags)
+        wandb.init(project='group_ortho', config=OmegaConf.to_container(args, resolve=True),
+                   notes=args.notes, tags=tags)
 
     dir_name = 'ws_' + str(args.use_ws) + '_reg_' + ('0' if args.reg_type is None else args.reg_type) +\
                '_norm_' + args.norm + '_decay_' + str(args.adjust_decay)
@@ -126,8 +139,7 @@ def main():
             transform_train = transforms.Compose([
                 transforms.ToTensor(),
                 transforms.Lambda(lambda x: F.pad(
-                    Variable(x.unsqueeze(0), requires_grad=False),
-                    (4, 4, 4, 4), mode='reflect').data.squeeze()),
+                    x.unsqueeze(0), (4, 4, 4, 4), mode='reflect').data.squeeze()),
                 transforms.ToPILImage(),
                 transforms.RandomCrop(32),
                 transforms.RandomHorizontalFlip(),
@@ -154,7 +166,7 @@ def main():
         batch_size=args.batch_size, shuffle=True, **kwargs)
 
     # create model
-    norm_layer = nn.BatchNorm2d if args.norm == 'BN' else get_group_norm
+    norm_layer = nn.BatchNorm2d if args.norm == 'BN' else GroupNormCreator(args.force_num_groups)
     model = WideResNet(args.layers, args.dataset == 'cifar10' and 10 or 100,
                        norm_layer, args.widen_factor, dropRate=args.droprate)
 
@@ -205,13 +217,13 @@ def main():
                                 weight_decay=args.weight_decay)
 
     for epoch in range(args.start_epoch, args.epochs):
-        adjust_learning_rate(optimizer, epoch + 1)
+        adjust_learning_rate(optimizer, epoch + 1, args)
         if args.adjust_decay:
-            adjust_weight_decay_rate(optimizer, epoch+1)  # uncommenting since using SO/DSO reg
-            odecay = adjust_ortho_decay_rate(epoch + 1)
+            adjust_weight_decay_rate(optimizer, epoch+1, args)  # uncommenting since using SO/DSO reg
+            odecay = adjust_ortho_decay_rate(epoch + 1, args)
         # train for one epoch
         train_loss, top1, reg_loss, class_loss = train(train_loader, model, criterion, optimizer, epoch,
-                                                       odecay, weight_groups_dict)
+                                                       odecay, weight_groups_dict, args)
 
         # evaluate on validation set
         test_acc, test_loss = validate(val_loader, model, criterion, epoch)
@@ -235,7 +247,7 @@ def main():
         wandb.finish()
 
 
-def train(train_loader, model, criterion, optimizer, epoch, odecay, weight_groups_dict):
+def train(train_loader, model, criterion, optimizer, epoch, odecay, weight_groups_dict, args):
     """Train for one epoch on the training set"""
     batch_time = AverageMeter()
     losses = AverageMeter()
@@ -255,7 +267,8 @@ def train(train_loader, model, criterion, optimizer, epoch, odecay, weight_group
         output = model(input)
 
         # Compute Loss
-        oloss = weights_reg(model, args.reg_type, weight_groups_dict)
+        oloss = weights_reg(model, args.reg_type, weight_groups_dict=weight_groups_dict,
+                            randomize=args.random_filter_order)
         reg_loss.update(oloss, input.shape[0])
         oloss = odecay * oloss
         loss = criterion(output, target)
@@ -275,13 +288,17 @@ def train(train_loader, model, criterion, optimizer, epoch, odecay, weight_group
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
+
+        wd = optimizer.param_groups[0]['weight_decay']
         if i % args.print_freq == 0:
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
+                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t '
+                  'weight_decay {wd}\t '
+                  'ortho lambda = {odecay}'.format(
                 epoch, i, len(train_loader), batch_time=batch_time,
-                loss=losses, top1=top1))
+                loss=losses, top1=top1, wd=wd, odecay=odecay))
 
     return losses.avg, top1.avg, reg_loss.avg, class_loss.avg
 
@@ -347,7 +364,7 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def adjust_learning_rate(optimizer, epoch):
+def adjust_learning_rate(optimizer, epoch, args):
     """Sets the learning rate to the initial LR divided by 5 at 60th, 120th and 160th epochs"""
     lr = args.lr * ((0.2 ** int(epoch >= 60)) * (0.2 ** int(epoch >= 120)) * (0.2 ** int(epoch >= 160)))
     # log to TensorBoard
@@ -357,11 +374,11 @@ def adjust_learning_rate(optimizer, epoch):
         param_group['lr'] = lr
 
 
-def adjust_weight_decay_rate(optimizer, epoch):
+def adjust_weight_decay_rate(optimizer, epoch, args):
     w_d = args.weight_decay
 
     if epoch > 20:
-        w_d = 5e-4
+        w_d = 1e-4  # Paper's SO value
     elif epoch > 10:
         w_d = 1e-6
 
@@ -369,7 +386,7 @@ def adjust_weight_decay_rate(optimizer, epoch):
         param_group['weight_decay'] = w_d
 
 
-def adjust_ortho_decay_rate(epoch):
+def adjust_ortho_decay_rate(epoch, args):
     o_d = args.ortho_decay
 
     if epoch > 120:

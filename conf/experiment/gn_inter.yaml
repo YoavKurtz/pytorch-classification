@@ -1,0 +1,4 @@
+# @package _global_
+
+norm: GN
+reg_type: GSO_inter

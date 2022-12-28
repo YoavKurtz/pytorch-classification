@@ -1,0 +1,33 @@
+project: group_ortho
+name: wide_resnet_cifar10_constant_hp - round 2
+description: Looking for best constant WD/OrthoDecay params
+
+program: cifar_wide.py
+
+method: random
+metric:
+  goal: maximize
+  name: val acc
+
+parameters:
+  norm:
+    value: GN
+  adjust_decay:
+    value: False
+  #==== SWEEP PARAMS ====#
+  reg_type:
+    values: [GSO_inter, GSO_intra]
+  weight_decay:
+    distribution: log_uniform_values
+    min: 1e-5
+    max: 1e-3
+  ortho_decay:
+    distribution: log_uniform_values
+    min: 5e-3
+    max: 0.1
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
