@@ -65,7 +65,7 @@ parser.add_argument('--group-dict-path', type=str, default=None)
 parser.add_argument('--use-ws', action='store_true', default=False)
 parser.add_argument('--adjust-decay', action='store_true', default=False)
 parser.add_argument('--manualSeed', type=int, help='manual seed', default=0)
-
+parser.add_argument('--num_workers', type=int, default=8)
 parser.add_argument('--force_num_groups', type=int, default=None)
 
 
@@ -96,13 +96,21 @@ def l2_reg_ortho(mdl):
     return l2_reg
 
 
-def weights_reg(mdl, reg_type, weight_groups_dict=None, randomize=False):
+def weights_reg(mdl, reg_type, weight_groups_dict=None, randomize_mode=None):
     if reg_type == 'SO':
         return l2_reg_ortho(mdl)
     elif reg_type in ['GSO_intra', 'GSO_inter']:
-        return wr.group_reg_ortho_l2(mdl, reg_type[len('GSO_'):], weight_groups_dict, randomize=randomize)
+        return wr.group_reg_ortho_l2(mdl, reg_type[len('GSO_'):], weight_groups_dict, randomize_mode=randomize_mode)
     else:
         return 0
+
+
+def generate_permutation(weight_groups_dict):
+    for k in weight_groups_dict.keys():
+        c_out = weight_groups_dict[k]['c_out']
+        weight_groups_dict[k]['perm'] = torch.randperm(c_out)  # Add another entry to the dict
+
+    return weight_groups_dict
 
 
 @hydra.main(version_base=None, config_path='conf', config_name='cifar_wide')
@@ -111,7 +119,9 @@ def main(args: DictConfig):
     # args = parser.parse_args()
 
     if args.manualSeed is not None:
-        random_seed(args.manualSeed)
+        random_seed(seed=args.manualSeed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     assert args.use_ws is False, "not supported yet!"
     use_wandb = not args.wandb_off
@@ -155,7 +165,7 @@ def main(args: DictConfig):
             transforms.ToTensor(),
             normalize
         ])
-    kwargs = {'num_workers': 1, 'pin_memory': True}
+    kwargs = {'num_workers': args.num_workers, 'pin_memory': True}
     assert (args.dataset == 'cifar10' or args.dataset == 'cifar100')
     train_loader = torch.utils.data.DataLoader(
         datasets.__dict__[args.dataset.upper()](os.path.join(CIFAR_PATH, args.dataset), train=True, download=False,
@@ -186,6 +196,8 @@ def main(args: DictConfig):
     else:
         weight_groups_dict = {}
 
+    if args.random_filter_mode == 'constant':
+        weight_groups_dict = generate_permutation(weight_groups_dict)
     if args.group_dict_path is not None and args.norm == 'GN':
         torch.save(weight_groups_dict, args.group_dict_path)
 
@@ -268,7 +280,7 @@ def train(train_loader, model, criterion, optimizer, epoch, odecay, weight_group
 
         # Compute Loss
         oloss = weights_reg(model, args.reg_type, weight_groups_dict=weight_groups_dict,
-                            randomize=args.random_filter_order)
+                            randomize_mode=args.random_filter_mode)
         reg_loss.update(oloss, input.shape[0])
         oloss = odecay * oloss
         loss = criterion(output, target)

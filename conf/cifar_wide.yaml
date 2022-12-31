@@ -19,7 +19,7 @@ resume: ""
 wandb_off: False
 
 force_num_groups:
-
+num_workers: 8
 notes: ""
 extra_tags: ""
 group_dict_path:
@@ -28,5 +28,5 @@ adjust_decay: True
 
 manualSeed: 0
 
-random_filter_order: False
+random_filter_mode:  # iter / constant
 

@@ -1,0 +1,31 @@
+project: group_ortho
+name: wide_resnet_lamda_sweep_no_sched
+description: Looking for best constant lambda. Setting WD according WRN default.
+
+program: cifar_wide.py
+
+method: grid
+metric:
+  goal: maximize
+  name: val acc
+
+parameters:
+  norm:
+    value: GN
+  adjust_decay:
+    value: False
+  weight_decay:
+    value: 5e-4
+  extra_tags:
+    value: 'constant lamdba sweep'
+  #==== SWEEP PARAMS ====#
+  reg_type:
+    values: [GSO_inter, GSO_intra]
+  ortho_decay:
+    values: [0.1, 0.05, 0.01, 0.005, 0.001]
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}

@@ -40,7 +40,7 @@ def get_layers_to_regularize(model: nn.Module, input_shape):
         next_module_name, next_module = ordered_named_modules[ii + 1]
         if isinstance(current_module, nn.Conv2d) and isinstance(next_module, nn.GroupNorm):
             num_groups = next_module.num_groups
-            out_dict[current_module_name] = num_groups
+            out_dict[current_module_name] = {'num_groups': num_groups, 'c_out': current_module.weight.shape[0]}
 
     return out_dict
 
@@ -66,7 +66,6 @@ def orth_dist(w):
     return torch.norm(mat @ mat.T - torch.eye(mat.shape[0]).cuda()) ** 2
 
 
-
 def remove_prefix(k):
     if k.startswith('module'):
         # Data parallel case
@@ -75,7 +74,24 @@ def remove_prefix(k):
     return k
 
 
-def group_reg_ortho_l2(model: nn.Module, reg_type: str, layers_dict: dict, randomize: bool = False):
+def randomize_filter(W, layer_dict, randomize_mode):
+    if randomize_mode == 'constant':
+        assert 'perm' in layer_dict.keys()
+        # Use pre-calculated permutation to shuffle the filter order - filters will not be normalized
+        # according to the GN groups
+        current_weight_filter_permutation = layer_dict['perm']
+        W = W[current_weight_filter_permutation]
+    elif randomize_mode == 'iter':
+        # Randomly permute the output filters - this way filters will not be normalized according
+        # to the GN groups
+        W = W[torch.randperm(W.shape[0])]
+    else:
+        raise Exception(f'Unsupported randomize mode {randomize_mode}')
+
+    return W
+
+
+def group_reg_ortho_l2(model: nn.Module, reg_type: str, layers_dict: dict, randomize_mode: str = None):
     assert reg_type in ['inter', 'intra']
 
     total_reg_value = 0
@@ -84,14 +100,12 @@ def group_reg_ortho_l2(model: nn.Module, reg_type: str, layers_dict: dict, rando
         k = remove_prefix(k)
         if k in layers_dict.keys():
             W = v.weight
-            num_groups = layers_dict[k]
+            num_groups = layers_dict[k]['num_groups']
             c_out = W.shape[0]
             group_size = c_out // num_groups
 
-            if randomize:
-                # Randomly permute the output filters - this way filters will not be normalized according
-                # to the GN groups
-                W = W[torch.randperm(c_out)]
+            if randomize_mode:
+                W = randomize_filter(W, layers_dict[k], randomize_mode)
 
             if reg_type == 'intra':
                 for ii in range(group_size):
