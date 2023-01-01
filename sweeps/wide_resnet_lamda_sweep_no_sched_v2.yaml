@@ -1,5 +1,5 @@
 project: group_ortho
-name: wide_resnet_lamda_sweep_no_sched_v2
+name: wide_resnet_ npteslamda_sweep_no_sched_v2
 description: Looking for best constant lambda. Setting WD according WRN default. Second run after making it as
   deterministic as possible. Only intra as it showed better results in v1 sweep.
 

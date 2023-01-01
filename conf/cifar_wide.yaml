@@ -17,7 +17,7 @@ droprate: 0.3
 augment: True
 resume: ""
 wandb_off: False
-
+regularize_all: False
 force_num_groups:
 num_workers: 8
 notes: ""

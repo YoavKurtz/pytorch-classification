@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 
-def get_layers_to_regularize(model: nn.Module, input_shape):
+def get_layers_to_regularize(model: nn.Module, input_shape, regularize_all=False):
     ordered_named_modules = []  # list of tuples
     hook_handles = []
 
@@ -35,12 +35,25 @@ def get_layers_to_regularize(model: nn.Module, input_shape):
 
     # Iterate over modules, and look for conv layers followed by group norm
     out_dict = {}
+    # TODO: refactor this
     for ii in range(len(ordered_named_modules) - 1):
         current_module_name, current_module = ordered_named_modules[ii]
         next_module_name, next_module = ordered_named_modules[ii + 1]
         if isinstance(current_module, nn.Conv2d) and isinstance(next_module, nn.GroupNorm):
+            # TODO : in case of skip connections the order might not represent the actual data flow.
+            #   ordered_named_modules depends on where where the skip connection conv as called
+            #   (before/after/in the middle of the block).
             num_groups = next_module.num_groups
             out_dict[current_module_name] = {'num_groups': num_groups, 'c_out': current_module.weight.shape[0]}
+        elif regularize_all and hasattr(current_module, 'weight') and current_module.weight.ndimension() >= 2:
+            num_features = current_module.weight.shape[0]
+            out_dict[current_module_name] = {'num_groups': min(32, num_features // 4), 'c_out': num_features}
+
+    if regularize_all:
+        last_module_name, last_module = ordered_named_modules[-1]
+        if hasattr(last_module, 'weight') and last_module.weight.ndimension() >= 2:
+            num_features = last_module.weight.shape[0]
+            out_dict[last_module_name] = {'num_groups': min(32, num_features // 4), 'c_out': num_features}
 
     return out_dict
 
@@ -104,7 +117,7 @@ def group_reg_ortho_l2(model: nn.Module, reg_type: str, layers_dict: dict, rando
             c_out = W.shape[0]
             group_size = c_out // num_groups
 
-            if randomize_mode:
+            if randomize_mode and isinstance(v, nn.Conv2d):  # Only shuffle conv layers weights
                 W = randomize_filter(W, layers_dict[k], randomize_mode)
 
             if reg_type == 'intra':

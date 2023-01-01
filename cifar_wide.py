@@ -126,7 +126,7 @@ def main(args: DictConfig):
     assert args.use_ws is False, "not supported yet!"
     use_wandb = not args.wandb_off
     if use_wandb:
-        tags = [args.dataset, 'wide resnet']
+        tags = [args.dataset, 'wide resnet', 'repr']
         if not args.adjust_decay:
             tags += ['no decay adj']
         if args.extra_tags != '':
@@ -134,6 +134,7 @@ def main(args: DictConfig):
 
         wandb.init(project='group_ortho', config=OmegaConf.to_container(args, resolve=True),
                    notes=args.notes, tags=tags)
+        wandb.run.log_code(".")
 
     dir_name = 'ws_' + str(args.use_ws) + '_reg_' + ('0' if args.reg_type is None else args.reg_type) +\
                '_norm_' + args.norm + '_decay_' + str(args.adjust_decay)
@@ -188,7 +189,7 @@ def main(args: DictConfig):
     odecay = args.ortho_decay
 
     if args.norm == 'GN' and args.reg_type in GSO_TYPES:
-        weight_groups_dict = wr.get_layers_to_regularize(model, (3, 32, 32))
+        weight_groups_dict = wr.get_layers_to_regularize(model, (3, 32, 32), regularize_all=args.regularize_all)
     elif args.norm == 'BN' and args.reg_type in GSO_TYPES:
         # Load saved group dict and use it to set ortho groups
         assert os.path.exists(args.group_dict_path), 'Must specify path to weight-group dict'
