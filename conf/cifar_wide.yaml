@@ -30,3 +30,7 @@ manualSeed: 0
 
 random_filter_mode:  # iter / constant
 
+shuffle_train: True
+shuffle_val: False
+
+

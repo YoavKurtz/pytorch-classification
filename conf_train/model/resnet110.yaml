@@ -1,0 +1,19 @@
+# @package _global_
+
+# Based on orig resnet cifar10 config an the following repo:
+# https://github.com/akamaster/pytorch_resnet_cifar10/blob/master/trainer.py
+
+
+arch: l_resnet110
+
+epochs: 200
+start_epoch: 0
+train_batch: 128
+test_batch: 128
+lr: 0.1
+drop: 0.
+schedule: 100,150  # Must be in format num1,num2,... no spaces after ','
+gamma: 0.1
+momentum: 0.9
+weight_decay: 1e-4
+use_ws: False

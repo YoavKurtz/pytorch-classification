@@ -85,7 +85,7 @@ class GroupNormCreator:
 
 
 def l2_reg_ortho(mdl):
-    """Function used for Orthogonal Regularization reg = ||W_t W - I ||^2"""
+    """Function used for Orthogonal Regularization reg = ||W W_t - I ||^2"""
     l2_reg = 0
     for W in mdl.parameters():
         if W.ndimension() < 2:
@@ -171,10 +171,10 @@ def main(args: DictConfig):
     train_loader = torch.utils.data.DataLoader(
         datasets.__dict__[args.dataset.upper()](os.path.join(CIFAR_PATH, args.dataset), train=True, download=False,
                                                 transform=transform_train),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
+        batch_size=args.batch_size, shuffle=args.shuffle_train, **kwargs)
     val_loader = torch.utils.data.DataLoader(
         datasets.__dict__[args.dataset.upper()](os.path.join(CIFAR_PATH, args.dataset), train=False, transform=transform_test),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
+        batch_size=args.batch_size, shuffle=args.shuffle_val, **kwargs)
 
     # create model
     norm_layer = nn.BatchNorm2d if args.norm == 'BN' else GroupNormCreator(args.force_num_groups)
@@ -329,12 +329,10 @@ def validate(val_loader, model, criterion, epoch):
         input = input.cuda()
         # print ( input.shape)
         with torch.no_grad():
-            input_var = torch.autograd.Variable(input)
-            target_var = torch.autograd.Variable(target)
+            # compute output
+            output = model(input)
 
-        # compute output
-        output = model(input_var)
-        loss = criterion(output, target_var)
+        loss = criterion(output, target)
 
         # measure accuracy and record loss
         prec1 = accuracy(output.data, target, topk=(1,))[0]

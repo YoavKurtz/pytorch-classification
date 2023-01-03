@@ -10,6 +10,9 @@ import shutil
 import time
 import random
 
+import hydra
+from omegaconf import OmegaConf, DictConfig
+
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -19,7 +22,7 @@ import torch.utils.data as data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-
+import numpy as np
 import wandb
 
 import models.imagenet as customized_models
@@ -104,21 +107,11 @@ parser.add_argument('--gpu-id', default='0', type=str,
 parser.add_argument('--reg-type', type=str, default=None)
 parser.add_argument('--reg-gamma', type=float, default=1e-2)
 
-args = parser.parse_args()
-state = {k: v for k, v in args._get_kwargs()}
+# args = parser.parse_args()
+# state = {k: v for k, v in args._get_kwargs()}
 
 # Use CUDA
 use_cuda = torch.cuda.is_available()
-
-# Random seed
-if args.manualSeed is None:
-    args.manualSeed = random.randint(1, 10000)
-random.seed(args.manualSeed)
-torch.manual_seed(args.manualSeed)
-if use_cuda:
-    torch.cuda.manual_seed_all(args.manualSeed)
-
-best_acc = 0  # best test accuracy
 
 
 def print_flare(s: str):
@@ -186,8 +179,24 @@ def get_loaders(args, is_cifar):
     return train_loader, val_loader, num_classes
 
 
-def main():
-    global best_acc
+def verify_args(args):
+    schedule_int = [int(num_str) for num_str in args.schedule.split(',')]
+    args.schedule = schedule_int
+
+
+@hydra.main(version_base=None, config_path='conf_train', config_name='train')
+def main(args: DictConfig):
+    verify_args(args)
+    # Random seed
+    if args.manualSeed is None:
+        args.manualSeed = random.randint(1, 10000)
+    random.seed(args.manualSeed)
+    torch.manual_seed(args.manualSeed)
+    np.random.seed(args.manualSeed)
+    if use_cuda:
+        torch.cuda.manual_seed_all(args.manualSeed)
+
+    best_acc = 0
     start_epoch = args.start_epoch  # start from epoch 0 or last checkpoint epoch
 
     use_chkpt = not args.checkpoint_off
@@ -208,7 +217,10 @@ def main():
     use_wandb = not args.wandb_off
     if use_wandb:
         tags = [args.data if is_cifar else 'imnet']
-        wandb.init(project='group_ortho', config=vars(args), notes=args.notes, tags=tags)
+        tags += ['resnet110']
+        wandb.init(project='group_ortho', config=OmegaConf.to_container(args, resolve=True),
+                   notes=args.notes, tags=tags)
+        wandb.run.log_code(".")
     # Data loading code
     train_loader, val_loader, num_classes = get_loaders(args, is_cifar)
 
@@ -245,6 +257,9 @@ def main():
     criterion = nn.CrossEntropyLoss().cuda()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.schedule,
+                                                        last_epoch=args.start_epoch - 1)
+
     # Resume
     title = 'ImageNet-' + args.arch
     if args.resume:
@@ -262,7 +277,6 @@ def main():
         logger = Logger(os.path.join(args.checkpoint, 'log.txt'), title=title)
         logger.set_names(['Learning Rate', 'Train Loss', 'Valid Loss', 'Train Acc.', 'Valid Acc.'])
 
-
     if args.evaluate:
         print('\nEvaluation only')
         test_loss, test_acc = test(val_loader, model, criterion, start_epoch, use_cuda)
@@ -271,12 +285,12 @@ def main():
 
     # Train and val
     for epoch in range(start_epoch, args.epochs):
-        adjust_learning_rate(optimizer, epoch)
 
-        print('\nEpoch: [%d | %d] LR: %f' % (epoch + 1, args.epochs, state['lr']))
+        current_lr = optimizer.param_groups[0]['lr']
+        print('\nEpoch: [%d | %d] LR: %f' % (epoch + 1, args.epochs, current_lr))
 
         train_loss, train_acc, reg_loss, class_loss = train(train_loader, model, criterion, optimizer, epoch, use_cuda,
-                                                            weight_groups_dict)
+                                                            weight_groups_dict, args)
         test_loss, test_acc = test(val_loader, model, criterion, epoch, use_cuda)
 
         if use_wandb:
@@ -284,7 +298,8 @@ def main():
                        'reg_loss': reg_loss, 'classification loss': class_loss})
 
         # append logger file
-        logger.append([state['lr'], train_loss, test_loss, train_acc, test_acc])
+        logger.append([current_lr, train_loss, test_loss, train_acc, test_acc])
+        lr_scheduler.step()
 
         # save model
         is_best = test_acc > best_acc
@@ -308,7 +323,7 @@ def main():
         wandb.finish()
 
 
-def train(train_loader, model, criterion, optimizer, epoch, use_cuda, weight_groups_dict):
+def train(train_loader, model, criterion, optimizer, epoch, use_cuda, weight_groups_dict, args):
     # switch to train mode
     model.train()
     torch.set_grad_enabled(True)
@@ -380,8 +395,6 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda, weight_gro
 
 
 def test(val_loader, model, criterion, epoch, use_cuda):
-    global best_acc
-
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -430,7 +443,9 @@ def test(val_loader, model, criterion, epoch, use_cuda):
                     )
         bar.next()
     bar.finish()
-    return (losses.avg, top1.avg)
+
+    return losses.avg, top1.avg
+
 
 def save_checkpoint(state, is_best, checkpoint='checkpoint', filename='checkpoint.pth.tar'):
     filepath = os.path.join(checkpoint, filename)
@@ -438,12 +453,6 @@ def save_checkpoint(state, is_best, checkpoint='checkpoint', filename='checkpoin
     if is_best:
         shutil.copyfile(filepath, os.path.join(checkpoint, 'model_best.pth.tar'))
 
-def adjust_learning_rate(optimizer, epoch):
-    global state
-    if epoch in args.schedule:
-        state['lr'] *= args.gamma
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = state['lr']
 
 if __name__ == '__main__':
     main()

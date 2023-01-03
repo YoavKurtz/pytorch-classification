@@ -1,0 +1,26 @@
+# Datasets
+data: cifar10
+workers: 32
+
+
+# General
+manualSeed: 0
+evaluate: False
+pretrained: False
+checkpoint:
+resume:
+
+wandb_off: False
+checkpoint_off: Faslse
+
+# Wandb related
+notes: ''
+
+# Ortho - Regularization
+reg_type:
+reg_gamma: 1e-2
+
+
+defaults:
+  - _self_
+  - model: resnet110
