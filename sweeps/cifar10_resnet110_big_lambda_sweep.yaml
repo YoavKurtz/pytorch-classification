@@ -1,0 +1,30 @@
+project: group_ortho
+name: cifar10_resnet110_big_lambda_sweep
+description: After modifying code env a bit for reproducibility, looking for best constant ortho decay param.
+  Testing different reg type and whether or not to reg FC layer.
+
+program: train_general.py
+
+method: grid
+metric:
+  goal: maximize
+  name: val acc
+
+parameters:
+  norm:
+    value: GN
+  extra_tags:
+    value: 'constant lamdba sweep v2'
+  #==== SWEEP PARAMS ====#
+  reg_type:
+    values: [GSO_intra, GSO_inter]
+  regularize_all:
+    values: [True, False]
+  ortho_decay:
+    values: [0.1,0.01,0.001]
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}

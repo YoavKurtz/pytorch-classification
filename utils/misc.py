@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.init as init
 from torch.autograd import Variable
 
-__all__ = ['get_mean_and_std', 'init_params', 'mkdir_p', 'AverageMeter']
+__all__ = ['get_mean_and_std', 'init_params', 'mkdir_p', 'AverageMeter', 'GroupNormCreator']
 
 
 def get_mean_and_std(dataset):
@@ -74,3 +74,18 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
+
+
+class GroupNormCreator:
+    # Functor for creating GN layer
+    def __init__(self, force_num_groups=None):
+        self.force_num_groups = force_num_groups
+
+    def __call__(self, num_features):
+        if self.force_num_groups:
+            num_groups = min(self.force_num_groups, num_features)
+        else:
+            # setting num groups according to Weight-Standardization CIFAR flow
+            num_groups = min(32, num_features // 4)
+
+        return nn.GroupNorm(num_channels=num_features, num_groups=num_groups)

@@ -2,8 +2,8 @@
 data: cifar10
 workers: 32
 
-
 # General
+print_freq: 10
 manualSeed: 0
 evaluate: False
 pretrained: False
@@ -11,15 +11,17 @@ checkpoint:
 resume:
 
 wandb_off: False
-checkpoint_off: Faslse
+checkpoint_off: False
+extra_tags: ''
 
 # Wandb related
 notes: ''
 
 # Ortho - Regularization
 reg_type:
-reg_gamma: 1e-2
-
+ortho_decay: 1e-2
+force_num_groups: False
+regularize_all: True
 
 defaults:
   - _self_

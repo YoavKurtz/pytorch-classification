@@ -6,14 +6,17 @@
 
 arch: l_resnet110
 
+norm: BN
 epochs: 200
 start_epoch: 0
 train_batch: 128
 test_batch: 128
 lr: 0.1
 drop: 0.
-schedule: 100,150  # Must be in format num1,num2,... no spaces after ','
+schedule: [100,150]
 gamma: 0.1
 momentum: 0.9
 weight_decay: 1e-4
 use_ws: False
+
+warmup: True  # train using lr 0.01 for the first epoch

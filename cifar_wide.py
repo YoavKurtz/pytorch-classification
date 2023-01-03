@@ -19,6 +19,7 @@ from omegaconf import OmegaConf, DictConfig
 
 from timm.utils import random_seed
 
+from utils.misc import GroupNormCreator
 from models.cifar.wrn import WideResNet
 import weight_regularization as wr
 
@@ -67,21 +68,6 @@ parser.add_argument('--adjust-decay', action='store_true', default=False)
 parser.add_argument('--manualSeed', type=int, help='manual seed', default=0)
 parser.add_argument('--num_workers', type=int, default=8)
 parser.add_argument('--force_num_groups', type=int, default=None)
-
-
-class GroupNormCreator:
-    # Functor for creating GN layer
-    def __init__(self, force_num_groups=None):
-        self.force_num_groups = force_num_groups
-
-    def __call__(self, num_features):
-        if self.force_num_groups:
-            num_groups = min(self.force_num_groups, num_features)
-        else:
-            # setting num groups according to Weight-Standardization CIFAR flow
-            num_groups = min(32, num_features // 4)
-
-        return nn.GroupNorm(num_channels=num_features, num_groups=num_groups)
 
 
 def l2_reg_ortho(mdl):

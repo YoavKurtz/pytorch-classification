@@ -27,6 +27,7 @@ import wandb
 
 import models.imagenet as customized_models
 
+from utils.misc import GroupNormCreator
 from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
 import weight_regularization as wr
 
@@ -118,6 +119,12 @@ def print_flare(s: str):
     print('<' + '=' * 5 + s + '=' * 5 + '>')
 
 
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 def get_loaders(args, is_cifar):
     if is_cifar:
         print_flare('CIFAR training')
@@ -141,9 +148,13 @@ def get_loaders(args, is_cifar):
 
         trainset = dataloader(root=os.path.join(CIFAR_PATH, args.data), train=True, download=False,
                               transform=transform_train)
-        train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.train_batch, shuffle=True,
-                                                   num_workers=args.workers)
+        
+        # Setting seed to loader generator. Each worker process is seeded using seed_worker() method
+        g = torch.Generator()
+        g.manual_seed(args.manualSeed)
 
+        train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.train_batch, shuffle=True,
+                                                   num_workers=args.workers, worker_init_fn=seed_worker, generator=g)
         testset = dataloader(root=os.path.join(CIFAR_PATH, args.data), train=False, download=False,
                              transform=transform_test)
         val_loader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch, shuffle=False,
@@ -179,14 +190,8 @@ def get_loaders(args, is_cifar):
     return train_loader, val_loader, num_classes
 
 
-def verify_args(args):
-    schedule_int = [int(num_str) for num_str in args.schedule.split(',')]
-    args.schedule = schedule_int
-
-
 @hydra.main(version_base=None, config_path='conf_train', config_name='train')
 def main(args: DictConfig):
-    verify_args(args)
     # Random seed
     if args.manualSeed is None:
         args.manualSeed = random.randint(1, 10000)
@@ -195,6 +200,8 @@ def main(args: DictConfig):
     np.random.seed(args.manualSeed)
     if use_cuda:
         torch.cuda.manual_seed_all(args.manualSeed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     best_acc = 0
     start_epoch = args.start_epoch  # start from epoch 0 or last checkpoint epoch
@@ -217,6 +224,7 @@ def main(args: DictConfig):
     use_wandb = not args.wandb_off
     if use_wandb:
         tags = [args.data if is_cifar else 'imnet']
+        tags += [args.extra_tags]
         tags += ['resnet110']
         wandb.init(project='group_ortho', config=OmegaConf.to_container(args, resolve=True),
                    notes=args.notes, tags=tags)
@@ -238,11 +246,14 @@ def main(args: DictConfig):
                 )
     else:
         print("=> creating model '{}'".format(args.arch))
+        norm_layer = nn.BatchNorm2d if args.norm == 'BN' else GroupNormCreator(args.force_num_groups)
         model = models.__dict__[args.arch](
             num_classes=num_classes,
+            norm_layer=norm_layer,
             use_ws=args.use_ws)
 
-    weight_groups_dict = wr.get_layers_to_regularize(model, input_shape=(3, 32, 32) if is_cifar else (3, 224, 224))
+    weight_groups_dict = wr.get_layers_to_regularize(model, input_shape=(3, 32, 32) if is_cifar else (3, 224, 224),
+                                                     regularize_all=args.regularize_all)
 
     if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
         model.features = torch.nn.DataParallel(model.features)
@@ -259,6 +270,12 @@ def main(args: DictConfig):
 
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.schedule,
                                                         last_epoch=args.start_epoch - 1)
+
+    if args.warmup and args.arch in ['l_resnet110']:
+        # for resnet1202 original paper uses lr=0.01 for first 400 minibatches for warm-up
+        # then switch back. In this setup it will correspond for first epoch.
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = args.lr * 0.1
 
     # Resume
     title = 'ImageNet-' + args.arch
@@ -285,6 +302,12 @@ def main(args: DictConfig):
 
     # Train and val
     for epoch in range(start_epoch, args.epochs):
+
+        if args.warmup and args.arch in ['l_resnet110'] and epoch == 1:
+            # for resnet1202 original paper uses lr=0.01 for first 400 minibatches for warm-up
+            # then switch back. In this setup it will correspond for first epoch.
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = args.lr
 
         current_lr = optimizer.param_groups[0]['lr']
         print('\nEpoch: [%d | %d] LR: %f' % (epoch + 1, args.epochs, current_lr))
@@ -337,7 +360,6 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda, weight_gro
     task_losses = AverageMeter()
     end = time.time()
 
-    bar = Bar('Processing', max=len(train_loader))
     for batch_idx, (inputs, targets) in enumerate(train_loader):
         batch_size = inputs.size(0)
         if batch_size < args.train_batch:
@@ -353,8 +375,8 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda, weight_gro
         outputs = model(inputs)
         task_loss = criterion(outputs, targets)
         if args.reg_type is not None:
-            ortho_loss = wr.group_reg_ortho_l2(model, args.reg_type, weight_groups_dict)
-            loss = task_loss + args.reg_gamma * ortho_loss
+            ortho_loss = wr.group_reg_ortho_l2(model, args.reg_type[len('GSO_'):], weight_groups_dict)
+            loss = task_loss + args.ortho_decay * ortho_loss
         else:
             loss = task_loss
 
@@ -377,19 +399,13 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda, weight_gro
         end = time.time()
 
         # plot progress
-        bar.suffix  = '({batch}/{size}) Data: {data:.3f}s | Batch: {bt:.3f}s | Total: {total:} | ETA: {eta:} | Loss: {loss:.4f} | top1: {top1: .4f} | top5: {top5: .4f}'.format(
-                    batch=batch_idx + 1,
-                    size=len(train_loader),
-                    data=data_time.val,
-                    bt=batch_time.val,
-                    total=bar.elapsed_td,
-                    eta=bar.eta_td,
-                    loss=losses.avg,
-                    top1=top1.avg,
-                    top5=top5.avg,
-                    )
-        bar.next()
-    bar.finish()
+        if batch_idx % args.print_freq == 0:
+            print('Epoch: [{0}][{1}/{2}]\t'
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'top1 acc {top1.val:.3f} ({top1.avg:.3f})'.format(
+                epoch, batch_idx, len(train_loader), batch_time=batch_time,
+                loss=losses, top1=top1))
 
     return losses.avg, top1.avg, reg_loss.avg, task_losses.avg
 
@@ -406,7 +422,6 @@ def test(val_loader, model, criterion, epoch, use_cuda):
     torch.set_grad_enabled(False)
 
     end = time.time()
-    bar = Bar('Processing', max=len(val_loader))
     for batch_idx, (inputs, targets) in enumerate(val_loader):
         # measure data loading time
         data_time.update(time.time() - end)
@@ -428,21 +443,6 @@ def test(val_loader, model, criterion, epoch, use_cuda):
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-
-        # plot progress
-        bar.suffix  = '({batch}/{size}) Data: {data:.3f}s | Batch: {bt:.3f}s | Total: {total:} | ETA: {eta:} | Loss: {loss:.4f} | top1: {top1: .4f} | top5: {top5: .4f}'.format(
-                    batch=batch_idx + 1,
-                    size=len(val_loader),
-                    data=data_time.avg,
-                    bt=batch_time.avg,
-                    total=bar.elapsed_td,
-                    eta=bar.eta_td,
-                    loss=losses.avg,
-                    top1=top1.avg,
-                    top5=top5.avg,
-                    )
-        bar.next()
-    bar.finish()
 
     return losses.avg, top1.avg
 

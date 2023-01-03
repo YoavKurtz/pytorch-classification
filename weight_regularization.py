@@ -6,6 +6,9 @@ import torch.nn as nn
 
 
 def get_layers_to_regularize(model: nn.Module, input_shape, regularize_all=False):
+    # TODO: BUG. The following method depends on the order of calls in the block forward pass. if the residual
+    #  conv layer doesn't have norm after (like in wide resnet) and is called between the main block's convs then
+    #  some conv layers will be missing from the list although they are followed by norm
     ordered_named_modules = []  # list of tuples
     hook_handles = []
 
@@ -35,7 +38,6 @@ def get_layers_to_regularize(model: nn.Module, input_shape, regularize_all=False
 
     # Iterate over modules, and look for conv layers followed by group norm
     out_dict = {}
-    # TODO: refactor this
     for ii in range(len(ordered_named_modules) - 1):
         current_module_name, current_module = ordered_named_modules[ii]
         next_module_name, next_module = ordered_named_modules[ii + 1]
