@@ -70,27 +70,6 @@ parser.add_argument('--num_workers', type=int, default=8)
 parser.add_argument('--force_num_groups', type=int, default=None)
 
 
-def l2_reg_ortho(mdl):
-    """Function used for Orthogonal Regularization reg = ||W W_t - I ||^2"""
-    l2_reg = 0
-    for W in mdl.parameters():
-        if W.ndimension() < 2:
-            continue
-        else:
-            l2_reg += wr.orth_dist(W)
-
-    return l2_reg
-
-
-def weights_reg(mdl, reg_type, weight_groups_dict=None, randomize_mode=None):
-    if reg_type == 'SO':
-        return l2_reg_ortho(mdl)
-    elif reg_type in ['GSO_intra', 'GSO_inter']:
-        return wr.group_reg_ortho_l2(mdl, reg_type[len('GSO_'):], weight_groups_dict, randomize_mode=randomize_mode)
-    else:
-        return 0
-
-
 def generate_permutation(weight_groups_dict):
     for k in weight_groups_dict.keys():
         c_out = weight_groups_dict[k]['c_out']
@@ -266,8 +245,8 @@ def train(train_loader, model, criterion, optimizer, epoch, odecay, weight_group
         output = model(input)
 
         # Compute Loss
-        oloss = weights_reg(model, args.reg_type, weight_groups_dict=weight_groups_dict,
-                            randomize_mode=args.random_filter_mode)
+        oloss = wr.weights_reg(model, args.reg_type, weight_groups_dict=weight_groups_dict,
+                               randomize_mode=args.random_filter_mode)
         reg_loss.update(oloss, input.shape[0])
         oloss = odecay * oloss
         loss = criterion(output, target)

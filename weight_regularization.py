@@ -141,3 +141,24 @@ def group_reg_ortho_l2(model: nn.Module, reg_type: str, layers_dict: dict, rando
                 raise Exception(f'Unsupported mode {reg_type}')
 
     return total_reg_value
+
+
+def l2_reg_ortho(mdl):
+    """Function used for Orthogonal Regularization reg = ||W W_t - I ||^2"""
+    l2_reg = 0
+    for W in mdl.parameters():
+        if W.ndimension() < 2:
+            continue
+        else:
+            l2_reg += orth_dist(W)
+
+    return l2_reg
+
+
+def weights_reg(mdl, reg_type, weight_groups_dict=None, randomize_mode=None):
+    if reg_type == 'SO':
+        return l2_reg_ortho(mdl)
+    elif reg_type in ['GSO_intra', 'GSO_inter']:
+        return group_reg_ortho_l2(mdl, reg_type[len('GSO_'):], weight_groups_dict, randomize_mode=randomize_mode)
+    else:
+        return 0

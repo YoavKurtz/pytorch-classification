@@ -1,0 +1,9 @@
+# @package _global_
+# HP based on best (as to 1/4/23) inter run: https://wandb.ai/yoavk/group_ortho/runs/k6tj925l?workspace=user-yoavk
+
+norm: GN
+reg_type: GSO_intra
+ortho_decay: 1e-2
+
+regularize_all: False
+

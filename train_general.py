@@ -224,7 +224,8 @@ def main(args: DictConfig):
     use_wandb = not args.wandb_off
     if use_wandb:
         tags = [args.data if is_cifar else 'imnet']
-        tags += [args.extra_tags]
+        if args.extra_tags != '':
+            tags += [args.extra_tags]
         tags += ['resnet110']
         wandb.init(project='group_ortho', config=OmegaConf.to_container(args, resolve=True),
                    notes=args.notes, tags=tags)
@@ -246,7 +247,15 @@ def main(args: DictConfig):
                 )
     else:
         print("=> creating model '{}'".format(args.arch))
-        norm_layer = nn.BatchNorm2d if args.norm == 'BN' else GroupNormCreator(args.force_num_groups)
+        if args.norm == 'BN':
+            norm_layer = nn.BatchNorm2d
+        elif args.norm == 'GN':
+            norm_layer = GroupNormCreator(args.force_num_groups)
+        elif args.norm == 'NONE':
+            norm_layer = nn.Identity
+        else:
+            raise Exception(f'Unsupported norm type {args.norm}')
+
         model = models.__dict__[args.arch](
             num_classes=num_classes,
             norm_layer=norm_layer,
@@ -375,7 +384,7 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda, weight_gro
         outputs = model(inputs)
         task_loss = criterion(outputs, targets)
         if args.reg_type is not None:
-            ortho_loss = wr.group_reg_ortho_l2(model, args.reg_type[len('GSO_'):], weight_groups_dict)
+            ortho_loss = wr.weights_reg(model, args.reg_type, weight_groups_dict)
             loss = task_loss + args.ortho_decay * ortho_loss
         else:
             loss = task_loss
