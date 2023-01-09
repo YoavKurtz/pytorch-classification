@@ -1,0 +1,33 @@
+project: group_ortho
+name: cifar10_GSO_adjust_decay
+description: GSO tests for comparison with SO sched runs
+
+program: train_general.py
+
+method: grid
+metric:
+  goal: maximize
+  name: val acc
+
+parameters:
+  norm:
+    value: GN
+  adjust_decay:
+    value: True
+  ortho_decay:
+    value: 0.1
+  weight_decay:
+    value: 1e-8
+  warmup:
+    value: False
+  #==== SWEEP PARAMS ====#
+  reg_type:
+    values: [GSO_intra, GSO_inter]
+  use_ws:
+    values: [True, False]
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}

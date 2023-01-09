@@ -161,4 +161,4 @@ def weights_reg(mdl, reg_type, weight_groups_dict=None, randomize_mode=None):
     elif reg_type in ['GSO_intra', 'GSO_inter']:
         return group_reg_ortho_l2(mdl, reg_type[len('GSO_'):], weight_groups_dict, randomize_mode=randomize_mode)
     else:
-        return 0
+        return torch.tensor([0])

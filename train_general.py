@@ -31,6 +31,8 @@ from utils.misc import GroupNormCreator
 from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
 import weight_regularization as wr
 
+from cifar_wide import adjust_weight_decay_rate, adjust_ortho_decay_rate
+
 CIFAR_PATH = '/data/dataset/'
 
 # Models
@@ -190,6 +192,23 @@ def get_loaders(args, is_cifar):
     return train_loader, val_loader, num_classes
 
 
+def adjust_wd_od(optimizer, args, epoch):
+    """
+    For comparison with SO from
+    "Can We Gain More from Orthogonality Regularizations in Training Deep Networks?"
+    """
+    adjust_weight_decay_rate(optimizer, epoch + 1, args)
+    current_ortho_decay = adjust_ortho_decay_rate(epoch + 1, args)
+
+    if optimizer.param_groups[0]['weight_decay'] != args.weight_decay:
+        print(f'<===== Weight decay changed to {optimizer.param_groups[0]["weight_decay"]}')
+
+    if current_ortho_decay != args.ortho_decay:
+        print(f'<===== Ortho decay changed to {current_ortho_decay}')
+
+    return current_ortho_decay
+
+
 @hydra.main(version_base=None, config_path='conf_train', config_name='train')
 def main(args: DictConfig):
     # Random seed
@@ -251,7 +270,7 @@ def main(args: DictConfig):
             norm_layer = nn.BatchNorm2d
         elif args.norm == 'GN':
             norm_layer = GroupNormCreator(args.force_num_groups)
-        elif args.norm == 'NONE':
+        elif args.norm == 'none':
             norm_layer = nn.Identity
         else:
             raise Exception(f'Unsupported norm type {args.norm}')
@@ -311,18 +330,22 @@ def main(args: DictConfig):
 
     # Train and val
     for epoch in range(start_epoch, args.epochs):
-
         if args.warmup and args.arch in ['l_resnet110'] and epoch == 1:
             # for resnet1202 original paper uses lr=0.01 for first 400 minibatches for warm-up
             # then switch back. In this setup it will correspond for first epoch.
             for param_group in optimizer.param_groups:
                 param_group['lr'] = args.lr
 
+        if args.adjust_decay:
+            current_ortho_decay = adjust_wd_od(optimizer, args, epoch)
+        else:
+            current_ortho_decay = args.ortho_decay
+
         current_lr = optimizer.param_groups[0]['lr']
         print('\nEpoch: [%d | %d] LR: %f' % (epoch + 1, args.epochs, current_lr))
 
         train_loss, train_acc, reg_loss, class_loss = train(train_loader, model, criterion, optimizer, epoch, use_cuda,
-                                                            weight_groups_dict, args)
+                                                            current_ortho_decay, weight_groups_dict, args)
         test_loss, test_acc = test(val_loader, model, criterion, epoch, use_cuda)
 
         if use_wandb:
@@ -355,7 +378,7 @@ def main(args: DictConfig):
         wandb.finish()
 
 
-def train(train_loader, model, criterion, optimizer, epoch, use_cuda, weight_groups_dict, args):
+def train(train_loader, model, criterion, optimizer, epoch, use_cuda, ortho_decay, weight_groups_dict, args):
     # switch to train mode
     model.train()
     torch.set_grad_enabled(True)
@@ -385,9 +408,12 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda, weight_gro
         task_loss = criterion(outputs, targets)
         if args.reg_type is not None:
             ortho_loss = wr.weights_reg(model, args.reg_type, weight_groups_dict)
-            loss = task_loss + args.ortho_decay * ortho_loss
+            loss = task_loss + ortho_decay * ortho_loss
         else:
             loss = task_loss
+
+        if torch.isnan(loss) or torch.isinf(loss):
+            raise Exception(f'Bad loss value, got {loss.item()}. Stopping run.')
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(outputs.data, targets.data, topk=(1, 5))

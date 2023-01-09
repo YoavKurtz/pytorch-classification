@@ -21,7 +21,8 @@ notes: ''
 reg_type:
 ortho_decay: 1e-2
 force_num_groups: False
-regularize_all: True
+regularize_all: False
+adjust_decay: False
 
 defaults:
   - _self_

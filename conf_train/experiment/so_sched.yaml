@@ -1,0 +1,12 @@
+# @package _global_
+
+# Based on WD lambda decay from https://proceedings.neurips.cc/paper/2018/file/bf424cb7b0dea050a42b9739eb261a3a-Paper.pdf
+norm: GN
+reg_type: SO
+ortho_decay: 0.1
+weight_decay: 1e-8
+adjust_decay: True
+
+warmup: False
+
+regularize_all: False
