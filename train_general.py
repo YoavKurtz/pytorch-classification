@@ -143,6 +143,11 @@ def update_batch_size(args):
 
     print(f'Batch size per GPU = {args.train_batch} (total = {orig_batch_size})')
 
+    # Modifying val batch size as well
+    assert args.test_batch % dist.get_world_size() == 0, \
+        'validation : Cannot distribute batches evenly across devices. (use 2, 4, 8 gpus)'
+    args.test_batch = args.test_batch // dist.get_world_size()
+
 
 def get_loaders(args, is_cifar):
     if is_cifar:
@@ -193,15 +198,24 @@ def get_loaders(args, is_cifar):
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
 
-        train_loader = torch.utils.data.DataLoader(
-            datasets.ImageFolder(traindir, transforms.Compose([
+        trainset = datasets.ImageFolder(traindir, transforms.Compose([
                 transforms.RandomSizedCrop(224),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                normalize,
-            ])),
-            batch_size=args.train_batch, shuffle=True,
-            num_workers=args.workers, pin_memory=True)
+                normalize]))
+        # Setting seed to loader generator. Each worker process is seeded using seed_worker() method
+        g = torch.Generator()
+        g.manual_seed(args.manualSeed)
+
+        if dist.is_initialized():
+            sampler = torch.utils.data.distributed.DistributedSampler(trainset, seed=args.manualSeed)
+        else:
+            sampler = None
+
+        train_loader = torch.utils.data.DataLoader(trainset,
+                                                   batch_size=args.train_batch, shuffle=sampler is None,
+                                                   num_workers=args.workers, worker_init_fn=seed_worker, generator=g,
+                                                   pin_memory=True, sampler=sampler)
 
         val_loader = torch.utils.data.DataLoader(
             datasets.ImageFolder(valdir, transforms.Compose([
