@@ -28,7 +28,10 @@ import wandb
 import models.imagenet as customized_models
 
 from utils.misc import GroupNormCreator
-from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
+from utils import Logger, AverageMeter, accuracy, mkdir_p
+# Add parent older to path
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 import weight_regularization as wr
 
 from cifar_wide import adjust_weight_decay_rate, adjust_ortho_decay_rate
@@ -245,7 +248,8 @@ def main(args: DictConfig):
         tags = [args.data if is_cifar else 'imnet']
         if args.extra_tags != '':
             tags += [args.extra_tags]
-        tags += ['resnet110']
+        if args.arch == 'l_resnet110':
+            tags += ['resnet110']
         wandb.init(project='group_ortho', config=OmegaConf.to_container(args, resolve=True),
                    notes=args.notes, tags=tags)
         wandb.run.log_code(".")
@@ -280,14 +284,18 @@ def main(args: DictConfig):
             norm_layer=norm_layer,
             use_ws=args.use_ws)
 
-    weight_groups_dict = wr.get_layers_to_regularize(model, input_shape=(3, 32, 32) if is_cifar else (3, 224, 224),
+    weight_groups_dict = wr.get_layers_to_regularize(model, num_groups_fn=(lambda x: min(32, x // 4)),
                                                      regularize_all=args.regularize_all)
+
+    if args.random_filter_mode == 'constant':
+        weight_groups_dict = wr.generate_permutation(weight_groups_dict)
 
     if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
         model.features = torch.nn.DataParallel(model.features)
-        model.cuda()
     elif torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model).cuda()
+        model = torch.nn.DataParallel(model)
+
+    model.cuda()
 
     cudnn.benchmark = True
     print('    Total params: %.2fM' % (sum(p.numel() for p in model.parameters())/1000000.0))

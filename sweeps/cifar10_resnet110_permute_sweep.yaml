@@ -1,0 +1,32 @@
+project: group_ortho
+name: cifar10_resnet110_permute_sweep
+description: Verifying that it makes sense to set groups according to GN. Also testing which is more sensative to
+  random permutation - inter or intra.
+
+program: train_general.py
+
+method: grid
+metric:
+  goal: maximize
+  name: val acc
+
+parameters:
+  norm:
+    value: GN
+  extra_tags:
+    value: 'rand permute sweep'
+  use_ws:
+    value: False
+  #==== SWEEP PARAMS ====#
+  reg_type:
+    values: [GSO_intra, GSO_inter]
+  random_filter_mode:
+    values: ['constant', 'iter']
+
+
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}

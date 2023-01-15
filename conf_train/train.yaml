@@ -23,6 +23,7 @@ ortho_decay: 1e-2
 force_num_groups: False
 regularize_all: False
 adjust_decay: False
+random_filter_mode:
 
 defaults:
   - _self_

@@ -70,14 +70,6 @@ parser.add_argument('--num_workers', type=int, default=8)
 parser.add_argument('--force_num_groups', type=int, default=None)
 
 
-def generate_permutation(weight_groups_dict):
-    for k in weight_groups_dict.keys():
-        c_out = weight_groups_dict[k]['c_out']
-        weight_groups_dict[k]['perm'] = torch.randperm(c_out)  # Add another entry to the dict
-
-    return weight_groups_dict
-
-
 @hydra.main(version_base=None, config_path='conf', config_name='cifar_wide')
 def main(args: DictConfig):
     best_prec1 = 0
@@ -163,7 +155,7 @@ def main(args: DictConfig):
         weight_groups_dict = {}
 
     if args.random_filter_mode == 'constant':
-        weight_groups_dict = generate_permutation(weight_groups_dict)
+        weight_groups_dict = wr.generate_permutation(weight_groups_dict)
     if args.group_dict_path is not None and args.norm == 'GN':
         torch.save(weight_groups_dict, args.group_dict_path)
 
