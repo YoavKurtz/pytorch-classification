@@ -401,7 +401,10 @@ def main(args: DictConfig):
         checkpoint = torch.load(args.resume, map_location='cpu')
         best_acc = checkpoint['best_acc']
         start_epoch = checkpoint['epoch']
-        model.load_state_dict(checkpoint['state_dict'])
+        if isinstance(model, nn.parallel.DistributedDataParallel):
+            model.module.load_state_dict(checkpoint['state_dict'])
+        else:
+            model.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         logger = Logger(os.path.join(args.checkpoint, 'log.txt'), title=title, resume=True)
     else:
@@ -449,9 +452,10 @@ def main(args: DictConfig):
         is_best = test_acc > best_acc
         best_acc = max(test_acc, best_acc)
         if use_chkpt and is_master():
+            is_ddp = isinstance(model, nn.parallel.DistributedDataParallel)
             save_checkpoint({
                 'epoch': epoch + 1,
-                'state_dict': model.state_dict(),
+                'state_dict': model.module.state_dict() if is_ddp else model.state_dict(),
                 'acc': test_acc,
                 'best_acc': best_acc,
                 'optimizer': optimizer.state_dict(),
