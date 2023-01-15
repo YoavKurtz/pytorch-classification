@@ -18,6 +18,7 @@ momentum: 0.9
 weight_decay: 1e-4
 
 checkpoint: checkpoints/imagenet/resnet50
+print_freq: 100
 
 norm: GN
 use_ws: True

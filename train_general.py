@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
+import torch.distributed as dist
 import torch.optim as optim
 import torch.utils.data as data
 import torchvision.transforms as transforms
@@ -27,7 +28,7 @@ import wandb
 
 import models.imagenet as customized_models
 
-from utils.misc import GroupNormCreator
+from utils.misc import GroupNormCreator, is_master
 from utils import Logger, AverageMeter, accuracy, mkdir_p
 # Add parent older to path
 import sys
@@ -130,6 +131,19 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
+def update_batch_size(args):
+    # Modify effective batch size:
+    # When using a single GPU per process and per
+    # DistributedDataParallel, we need to divide the batch size
+    # ourselves based on the total number of GPUs we have
+    assert args.train_batch % dist.get_world_size() == 0, \
+        'Cannot distribute batches evenly across devices. (use 2, 4, 8 gpus)'
+    orig_batch_size = args.train_batch
+    args.train_batch = args.train_batch // dist.get_world_size()
+
+    print(f'Batch size per GPU = {args.train_batch} (total = {orig_batch_size})')
+
+
 def get_loaders(args, is_cifar):
     if is_cifar:
         print_flare('CIFAR training')
@@ -158,8 +172,16 @@ def get_loaders(args, is_cifar):
         g = torch.Generator()
         g.manual_seed(args.manualSeed)
 
-        train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.train_batch, shuffle=True,
-                                                   num_workers=args.workers, worker_init_fn=seed_worker, generator=g)
+        if dist.is_initialized():
+            sampler = torch.utils.data.distributed.DistributedSampler(trainset, seed=args.manualSeed)
+        else:
+            sampler = None
+
+        train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.train_batch,
+                                                   shuffle=sampler is None,
+                                                   num_workers=args.workers, worker_init_fn=seed_worker, generator=g,
+                                                   sampler=sampler)
+
         testset = dataloader(root=os.path.join(CIFAR_PATH, args.data), train=False, download=False,
                              transform=transform_test)
         val_loader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch, shuffle=False,
@@ -212,8 +234,39 @@ def adjust_wd_od(optimizer, args, epoch):
     return current_ortho_decay
 
 
+def setup_for_distributed(is_master):
+    """
+    This function disables printing when not in master process
+    """
+    import builtins as __builtin__
+    builtin_print = __builtin__.print
+
+    def print(*args, **kwargs):
+        force = kwargs.pop('force', False)
+        if is_master or force:
+            builtin_print(*args, **kwargs)
+
+    __builtin__.print = print
+
+
+def init_dist_training(local_rank):
+    print(f'Init DDP for rank {local_rank}')
+
+    dist.init_process_group(backend="nccl", init_method="env://")
+    if use_cuda:
+        torch.cuda.set_device(local_rank)
+
+    dist.barrier()  # Sync all processes
+    # Handle logging - only rank 0 should print
+    setup_for_distributed(local_rank == 0)
+
+
 @hydra.main(version_base=None, config_path='conf_train', config_name='train')
 def main(args: DictConfig):
+    # init DDP if needed. Note: script expected to be called with torchrun
+    if 'LOCAL_RANK' in os.environ:
+        local_rank = int(os.environ['LOCAL_RANK'])
+        init_dist_training(local_rank)
     # Random seed
     if args.manualSeed is None:
         args.manualSeed = random.randint(1, 10000)
@@ -244,7 +297,7 @@ def main(args: DictConfig):
     is_cifar = args.data in ['cifar10', 'cifar100']
 
     use_wandb = not args.wandb_off
-    if use_wandb:
+    if use_wandb and is_master():
         tags = [args.data if is_cifar else 'imnet']
         if args.extra_tags != '':
             tags += [args.extra_tags]
@@ -254,6 +307,9 @@ def main(args: DictConfig):
                    notes=args.notes, tags=tags)
         wandb.run.log_code(".")
     # Data loading code
+    if dist.is_initialized():
+        update_batch_size(args)
+
     train_loader, val_loader, num_classes = get_loaders(args, is_cifar)
 
     # create model
@@ -290,10 +346,17 @@ def main(args: DictConfig):
     if args.random_filter_mode == 'constant':
         weight_groups_dict = wr.generate_permutation(weight_groups_dict)
 
-    if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
-        model.features = torch.nn.DataParallel(model.features)
-    elif torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
+    if torch.cuda.device_count() > 1:
+        # Distributed training
+        if dist.is_initialized():
+            model.cuda()
+            model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+        else:
+            if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
+                model.features = torch.nn.DataParallel(model.features)
+            else:
+                print(f'Initiating DataParallel')
+                model = torch.nn.DataParallel(model)
 
     model.cuda()
 
@@ -320,7 +383,8 @@ def main(args: DictConfig):
         print('==> Resuming from checkpoint..')
         assert os.path.isfile(args.resume), 'Error: no checkpoint directory found!'
         args.checkpoint = os.path.dirname(args.resume)
-        checkpoint = torch.load(args.resume)
+        # setting map location to 'cpu' to avoid ddp problems.
+        checkpoint = torch.load(args.resume, map_location='cpu')
         best_acc = checkpoint['best_acc']
         start_epoch = checkpoint['epoch']
         model.load_state_dict(checkpoint['state_dict'])
@@ -338,6 +402,9 @@ def main(args: DictConfig):
 
     # Train and val
     for epoch in range(start_epoch, args.epochs):
+        if hasattr(train_loader.batch_sampler.sampler, "set_epoch"):
+            train_loader.batch_sampler.sampler.set_epoch(epoch)
+
         if args.warmup and args.arch in ['l_resnet110'] and epoch == 1:
             # for resnet1202 original paper uses lr=0.01 for first 400 minibatches for warm-up
             # then switch back. In this setup it will correspond for first epoch.
@@ -356,7 +423,7 @@ def main(args: DictConfig):
                                                             current_ortho_decay, weight_groups_dict, args)
         test_loss, test_acc = test(val_loader, model, criterion, epoch, use_cuda)
 
-        if use_wandb:
+        if use_wandb and is_master():
             wandb.log({'train_loss': train_loss, 'epoch': epoch, 'val_loss': test_loss, 'val acc': test_acc,
                        'reg_loss': reg_loss, 'classification loss': class_loss})
 
@@ -367,7 +434,7 @@ def main(args: DictConfig):
         # save model
         is_best = test_acc > best_acc
         best_acc = max(test_acc, best_acc)
-        if use_chkpt:
+        if use_chkpt and is_master():
             save_checkpoint({
                 'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
@@ -381,9 +448,12 @@ def main(args: DictConfig):
     print('Best acc:')
     print(best_acc)
 
-    if use_wandb:
+    if use_wandb and is_master():
         wandb.summary['best top1'] = best_acc
         wandb.finish()
+
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
 def train(train_loader, model, criterion, optimizer, epoch, use_cuda, ortho_decay, weight_groups_dict, args):

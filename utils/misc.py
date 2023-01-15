@@ -11,9 +11,10 @@ import math
 
 import torch.nn as nn
 import torch.nn.init as init
+import torch.distributed as dist
 from torch.autograd import Variable
 
-__all__ = ['get_mean_and_std', 'init_params', 'mkdir_p', 'AverageMeter', 'GroupNormCreator']
+__all__ = ['get_mean_and_std', 'init_params', 'mkdir_p', 'AverageMeter', 'GroupNormCreator', 'is_master']
 
 
 def get_mean_and_std(dataset):
@@ -89,3 +90,10 @@ class GroupNormCreator:
             num_groups = min(32, num_features // 4)
 
         return nn.GroupNorm(num_channels=num_features, num_groups=num_groups)
+
+
+def is_master():
+    if dist.is_initialized():
+        return dist.get_rank() == 0
+    else:
+        return True
