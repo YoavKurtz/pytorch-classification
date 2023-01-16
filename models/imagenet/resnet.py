@@ -197,11 +197,13 @@ def l_resnet50(pretrained=False, norm_layer=None, **kwargs):
     return model
 
 
-def l_resnet101(pretrained=False, **kwargs):
+def l_resnet101(pretrained=False,  norm_layer=None, **kwargs):
     """Constructs a ResNet-101 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
+    assert (not isinstance(norm_layer, nn.BatchNorm2d) and not isinstance(norm_layer, nn.Identity))
+
     model = ResNet(Bottleneck, [3, 4, 23, 3], **kwargs)
     return model
 

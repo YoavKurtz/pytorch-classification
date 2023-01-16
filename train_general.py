@@ -275,6 +275,21 @@ def init_dist_training(local_rank):
     setup_for_distributed(local_rank == 0)
 
 
+def gradient_accumulation_init(args):
+    # In case we are trying to train larger batch sizes than possible to fit on the GPU, we accumulate.
+    assert args.train_batch % args.max_batch_size == 0, f'batch size must be multiples of max_batch_size'
+
+    iters_to_accumulate = args.train_batch // args.max_batch_size
+    print(f'Batch size is {args.train_batch}'
+          f' but maximal possible size is {args.max_batch_size} ==>'
+          f'accumulating batches of {args.max_batch_size} for {iters_to_accumulate} iterations')
+
+    args.train_batch = args.max_batch_size
+    print(f'{args.train_batch} unique samples will be read from dataset on each loader iteration')
+
+    return iters_to_accumulate
+
+
 @hydra.main(version_base=None, config_path='conf_train', config_name='train')
 def main(args: DictConfig):
     # init DDP if needed. Note: script expected to be called with torchrun
@@ -323,6 +338,10 @@ def main(args: DictConfig):
     # Data loading code
     if dist.is_initialized():
         update_batch_size(args)
+    if args.train_batch > args.max_batch_size:
+        iters_to_accumulate = gradient_accumulation_init(args)
+    else:
+        iters_to_accumulate = 1
 
     train_loader, val_loader, num_classes = get_loaders(args, is_cifar)
 
@@ -437,7 +456,8 @@ def main(args: DictConfig):
         print('\nEpoch: [%d | %d] LR: %f' % (epoch + 1, args.epochs, current_lr))
 
         train_loss, train_acc, reg_loss, class_loss = train(train_loader, model, criterion, optimizer, epoch, use_cuda,
-                                                            current_ortho_decay, weight_groups_dict, args)
+                                                            iters_to_accumulate, current_ortho_decay,
+                                                            weight_groups_dict, args)
         test_loss, test_acc = test(val_loader, model, criterion, epoch, use_cuda)
 
         if use_wandb and is_master():
@@ -474,7 +494,8 @@ def main(args: DictConfig):
         dist.destroy_process_group()
 
 
-def train(train_loader, model, criterion, optimizer, epoch, use_cuda, ortho_decay, weight_groups_dict, args):
+def train(train_loader, model, criterion, optimizer, epoch, use_cuda, iters_to_accumulate,
+          ortho_decay, weight_groups_dict, args):
     # switch to train mode
     model.train()
     torch.set_grad_enabled(True)
@@ -521,9 +542,22 @@ def train(train_loader, model, criterion, optimizer, epoch, use_cuda, ortho_deca
             reg_loss.update(ortho_loss.item(), inputs.shape[0])
 
         # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        loss = loss / iters_to_accumulate
+        # Only performing gradient step after accumulating enough samples
+        perform_grad_step = ((batch_idx + 1) % iters_to_accumulate == 0) or (batch_idx + 1 == len(train_loader))
+        if isinstance(model, torch.nn.parallel.DistributedDataParallel) and not perform_grad_step:
+            # DDP performs "allreduce" sync after each backward call so it must be suppressed in order to
+            # perform accumulation.
+            with model.no_sync():
+                loss.backward()
+                # Grads don't match across ranks at this point (!!).
+        else:
+            loss.backward()
+
+        if perform_grad_step:
+            # Done accumulating, performing gradient step and updating weights
+            optimizer.step()
+            optimizer.zero_grad()
 
         # measure elapsed time
         batch_time.update(time.time() - end)

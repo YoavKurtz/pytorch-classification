@@ -20,3 +20,5 @@ weight_decay: 1e-4
 use_ws: False
 
 warmup: True  # train using lr 0.01 for the first epoch
+
+max_batch_size: 512
