@@ -393,7 +393,6 @@ def main(args: DictConfig):
 
     model.cuda()
 
-    cudnn.benchmark = True
     print('    Total params: %.2fM' % (sum(p.numel() for p in model.parameters())/1000000.0))
 
     # define loss function (criterion) and optimizer
