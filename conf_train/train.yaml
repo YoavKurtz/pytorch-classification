@@ -1,29 +1,29 @@
 # Datasets
 data: cifar10
-workers: 32
+workers: 32  # number of data loading workers
 
 # General
 print_freq: 10
-manualSeed: 0
+manualSeed: 0  # Random seed
 evaluate: False
 pretrained: False
-checkpoint:
+checkpoint:  # if None, use default path
 resume:
 
-wandb_off: False
-checkpoint_off: False
-extra_tags: ''
+checkpoint_off: False  # Disable checkpoint saving
 
 # Wandb related
-notes: ''
+wandb_off: False  # Dont use wandb
+notes: ''  # notes for the run
+extra_tags: ''  # Custom WANDB run tag
 
 # Ortho - Regularization
-reg_type:
-ortho_decay: 1e-2
-force_num_groups: False
-regularize_all: False
-adjust_decay: False
-random_filter_mode:
+reg_type:  # SO / GSO_inter / GSO_intra
+ortho_decay: 1e-2  # orthogonal regularization lambda
+force_num_groups:  # int. force number of group in group norm
+regularize_all: False  # Also regularize FC layers
+adjust_decay: False   # Adjust weight-decay and ortho-decay throughout the run
+random_filter_mode:  # 'iter' - generate random permutation on every iter / 'constant' - generate random permutation once
 
 defaults:
   - _self_

@@ -1,0 +1,33 @@
+project: group_ortho
+name: imnet_resnet50_lambda_sweep_inter
+description: Looking for better lambda value than 1e-2. Inter-Group
+
+program: train_general.py
+
+method: grid
+metric:
+  goal: maximize
+  name: val acc
+
+parameters:
+  model:
+    value: resnet50_imnet
+  extra_tags:
+    value: 'imnet lamdba sweep'
+  epochs:
+    value: 10
+  checkpoint_off:
+    value: True
+  #==== SWEEP PARAMS ====#
+  ortho_decay:
+#    values: [0.5, 0.05]
+    values: [0.1, 0.05, 1e-3, 1e-4]
+
+command:
+  - torchrun
+  - --standalone
+  - --nnodes=1
+  - --nproc_per_node=4
+  - ${program}
+  - ${args_no_hyphens}
+  - +experiment=gso_inter

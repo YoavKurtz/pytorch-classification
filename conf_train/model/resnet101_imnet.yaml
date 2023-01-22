@@ -21,9 +21,9 @@ checkpoint: checkpoints/imagenet/resnet101
 print_freq: 100
 
 norm: GN
-use_ws: True
+use_ws: True  # Use weight-standardization
 
-warmup: False
+warmup: False  # train using lr/10 for the first epoch (based on official resent paper)
 
 max_batch_size: 32  # max batch per single GPU
 

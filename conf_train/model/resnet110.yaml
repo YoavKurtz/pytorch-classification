@@ -17,8 +17,8 @@ schedule: [100,150]
 gamma: 0.1
 momentum: 0.9
 weight_decay: 1e-4
-use_ws: False
+use_ws: False  # Use weight-standardization
 
-warmup: True  # train using lr 0.01 for the first epoch
+warmup: True  # train using lr/10 for the first epoch (based on official resent paper)
 
 max_batch_size: 512
